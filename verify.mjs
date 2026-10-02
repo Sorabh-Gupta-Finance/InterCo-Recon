@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {reconcile, pairMatrix, validateLines, csv, toEUR, round2} from './dist/engine.mjs';
 import {sampleLines, rates, closeDate, entities} from './dist/data.mjs';
+import {explain, applyFixes, byBucket} from './dist/explain.mjs';
 import {importLines, toTemplateRows, parseCSV, parseDate, parseAmount, monthEnd} from './dist/io.mjs';
 
 const codes = entities.map(e => e.code);
@@ -104,4 +105,42 @@ for (const m of [/entity and partner are both SG01/, /side "X"/, /date "2026-13-
 assert.equal(bad.lines.length, 2, 'bad rows are left out');
 assert.match(importLines(hdr + '<b>,JP01,R,trade,A1,2026-06-01,JPY,1,SGD,1\n').errors[0], /short code/);
 
-console.log(JSON.stringify({result: 'passed', lines: r.summary.lines, matched: r.summary.matchedLines, exceptions: r.summary.exceptions, grossEUR: r.summary.grossEUR, byPass: r.summary.byPass}));
+// Resolution: a cause for every seeded difference, one item for the mis-posted invoice, and nothing left after the entries.
+const items = explain(r, {rates, closeDate});
+assert.equal(items.length, 11, 'eleven items: the wrong-partner invoice is one item across two exceptions');
+close(items.reduce((t, i) => t + i.gross, 0), 1943545.01);
+const item = doc => items.find(i => i.doc === doc);
+for (const [doc, bucket, owner, cause, cur, amount] of [
+  ['INV-DE02-US-0330', 'Timing', 'US01', /Goods in transit/, 'USD', 420000],
+  ['PAY-US01-0331', 'Timing', 'DE02', /Cash in transit/, 'USD', 300000],
+  ['ACR-DE01-MF-Q1-IN01', 'Missing or wrong booking', 'IN01', /not accrued the management fee/, 'EUR', 120000],
+  ['WHT-BR01-ROY-Q1', 'Missing or wrong booking', 'DE01', /withheld 15% tax/, 'EUR', 9000],
+  ['Balance', 'FX revaluation', 'BR01', /BR01 did not revalue/, 'BRL', 50000],
+  ['INV-IN01-SS-Q1-US01', 'Price or calculation', 'US01', /transfer-pricing rate/, 'USD', 15000],
+  ['INT-DE01-US01-Q1', 'Price or calculation', 'US01', /day count/, 'USD', 856.16],
+  ['INV-CN01-IN-0315', 'Missing or wrong booking', 'IN01', /against DE02; the invoice is from CN01/, 'USD', 80000],
+  ['INV-DE02-US-0209', 'Missing or wrong booking', 'US01', /posted INV-DE02-US-0209 twice/, 'USD', 95000],
+  ['DIV-US01-2026-01', 'Missing or wrong booking', 'DE01', /Dividend declared by US01/, 'USD', 500000],
+  ['LSE-DE01-IN01', 'Accounting policy', 'Group', /lessee and lessor/, 'EUR', 500000],
+]) {
+  const i = item(doc);
+  assert.ok(i, doc); assert.equal(i.bucket, bucket, doc); assert.equal(i.owner, owner, doc); assert.match(i.cause, cause);
+  assert.equal(i.entry.cur, cur, doc); close(i.entry.amount, amount);
+}
+assert.equal(item('INV-CN01-IN-0315').exceptionIds.length, 2);
+assert.match(item('Balance').entry.debit, /FX loss/);
+const after = reconcile(applyFixes(r.lines, items), {rates, closeDate});
+assert.equal(after.summary.exceptions, 0, 'every pair clears after the proposed entries');
+assert.equal(after.summary.matchedLines, after.summary.lines);
+const buckets = byBucket(items);
+assert.deepEqual(buckets.map(b => [b.bucket, b.items]), [['Timing', 2], ['Missing or wrong booking', 5], ['Price or calculation', 2], ['FX revaluation', 1], ['Accounting policy', 1]]);
+
+// Resolution on other data: an unexplained one-sided line stays open with no entry; a trade price difference gets an entry.
+const own = importLines(hdr + 'SG01,JP01,R,trade,A1,2026-01-10,USD,100,SGD,150\nSG01,JP01,R,trade,A2,2026-06-01,USD,200,SGD,300\nJP01,SG01,P,trade,A2,2026-06-01,USD,190,JPY,30780\n');
+const ownRates = {EUR: {close: 1}, USD: {close: 1}, SGD: {close: 1.5}, JPY: {close: 162}};
+const ownR = reconcile(own.lines, {rates: ownRates, closeDate: '2026-06-30'}), ownItems = explain(ownR, {rates: ownRates, closeDate: '2026-06-30'});
+assert.equal(ownItems.find(i => i.doc === 'A1').bucket, 'To investigate'); assert.equal(ownItems.find(i => i.doc === 'A1').entry, null);
+assert.match(ownItems.find(i => i.doc === 'A2').cause, /different amount/); close(ownItems.find(i => i.doc === 'A2').entry.amount, 10);
+assert.equal(reconcile(applyFixes(ownR.lines, ownItems), {rates: ownRates, closeDate: '2026-06-30'}).summary.exceptions, 1, 'only the unexplained line is left');
+
+console.log(JSON.stringify({result: 'passed', items: items.length, itemGrossEUR: round2(items.reduce((t, i) => t + i.gross, 0)), lines: r.summary.lines, matched: r.summary.matchedLines, exceptions: r.summary.exceptions, grossEUR: r.summary.grossEUR, byPass: r.summary.byPass}));

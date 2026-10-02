@@ -1,5 +1,6 @@
 import {reconcile, pairMatrix, csv, round2} from './engine.mjs';
 import {sampleLines, rates as sampleRates, closeDate as sampleClose, entities as sampleEntities, categories} from './data.mjs';
+import {explain, applyFixes, byBucket} from './explain.mjs';
 import {COLUMNS, importLines, toTemplateRows, monthEnd, MAX_LINES} from './io.mjs';
 
 const $ = s => document.querySelector(s);
@@ -17,7 +18,8 @@ function result() {
   if (missingRates().length) return null;
   if (!cache || cache.tolerance !== state.tolerance || cache.version !== version) {
     const r = reconcile(data.lines, {rates: data.rates, closeDate: data.closeDate, tolerance: state.tolerance});
-    cache = {tolerance: state.tolerance, version, r, matrix: pairMatrix(r, codes())};
+    const items = explain(r, {rates: data.rates, closeDate: data.closeDate});
+    cache = {tolerance: state.tolerance, version, r, matrix: pairMatrix(r, codes()), items, gross: round2(items.reduce((t, i) => t + i.gross, 0))};
   }
   return cache;
 }
@@ -25,7 +27,7 @@ const needRates = () => `<section class="card"><div class="note warn" style="mar
 const plural = (n, one, many = one + 's') => `${num(n, 0)} ${n === 1 ? one : many}`;
 
 const num = (n, d = 2) => new Intl.NumberFormat('en-GB', {minimumFractionDigits: d, maximumFractionDigits: d}).format(n);
-const eur = (n, d = 0) => (n < 0 ? '−€' : '€') + num(Math.abs(n), d);
+const eur = (n, d = 0) => (Math.abs(n) >= 0.5 / 10 ** d && n < 0 ? '−€' : '€') + num(Math.abs(n), d);
 const signedEur = n => (n > 0 ? '+' : '') + eur(n);
 const signedNum = n => (n < 0 ? '−' : n > 0 ? '+' : '') + num(Math.abs(n));
 const date = d => new Date(d + 'T00:00:00Z').toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC'});
@@ -54,7 +56,7 @@ function overview() {
   };
   const gaaps = new Set(ents.map(e => e.gaap).filter(Boolean)).size;
   return intro + `
-<div class="metrics">${metric('Lines matched automatically', `${num(s.matchedLines, 0)} of ${num(s.lines, 0)}`, `${num(s.matchRate * 100, 1)}% across three matching passes`, true)}${metric('Open exceptions', num(s.open, 0), `${s.withinTolerance} more within the ${eur(state.tolerance)} tolerance`)}${metric('Gross difference', eur(s.grossEUR), 'All exceptions, EUR at closing rates')}${metric('Entities', String(ents.length), `${plural(currenciesUsed().length, 'currency', 'currencies')}${gaaps ? ` · ${gaaps} local GAAPs` : ''}`)}</div>
+<div class="metrics">${metric('Lines matched automatically', `${num(s.matchedLines, 0)} of ${num(s.lines, 0)}`, `${num(s.matchRate * 100, 1)}% across three matching passes`, true)}${metric('Open exceptions', num(s.open, 0), `${s.withinTolerance} more within the ${eur(state.tolerance)} tolerance`)}${metric('Gross difference', eur(result().gross), `${plural(result().items.length, 'item')} to resolve, EUR at closing rates`)}${metric('Entities', String(ents.length), `${plural(currenciesUsed().length, 'currency', 'currencies')}${gaaps ? ` · ${gaaps} local GAAPs` : ''}`)}</div>
 <section class="card"><div class="cardhead"><h2>Pair matrix</h2><span class="pill neutral">EUR at closing rates</span></div>
 <p class="small muted" style="margin-top:-6px">Rows are who is owed; columns are who owes. Each cell is the creditor's receivable minus the debtor's payable, across all account types. Select a cell to see its exceptions.</p>
 <div class="tablewrap"><table class="matrix"><thead><tr><th>Owed to ↓ · Owed by →</th>${cs.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${cs.map((c, i) => `<tr><th scope="row">${esc(c)}<small>${esc([ents[i].currency, ents[i].gaap].filter(Boolean).join(' · ') || '—')}</small></th>${matrix[i].map((x, j) => (i === j ? '<td class="mx-self"></td>' : cell(x))).join('')}</tr>`).join('')}</tbody></table></div>
@@ -72,10 +74,32 @@ function exceptions() {
   const rows = r.exceptions.filter(e => (!state.pair || `${e.creditor}>${e.debtor}` === state.pair) && (state.status === 'all' || e.status === state.status));
   const pairs = [...new Set(r.exceptions.map(e => `${e.creditor}>${e.debtor}`))];
   const total = rows.reduce((t, e) => t + e.eur, 0);
-  return head('STEP 03 / EXCEPTIONS', 'Every difference, with the document behind it.', `${r.summary.open} open and ${r.summary.withinTolerance} within tolerance. Amounts are the creditor's view minus the debtor's.`, `<div class="actions">${button('Download exceptions CSV', 'export-exceptions', 'secondary')}</div>`) + `
+  return head('STEP 03 / EXCEPTIONS', 'Every difference, with the document behind it.', `${r.summary.open} open and ${r.summary.withinTolerance} within tolerance. Amounts are the creditor's view minus the debtor's.`, `<div class="actions">${button('Download exceptions CSV', 'export-exceptions', 'secondary')}${button('See causes and entries →', 'go-resolution')}</div>`) + `
 <section class="card"><div class="toolbar"><div class="field"><label for="pairFilter">Pair</label><select id="pairFilter" data-control="pair"><option value="">All pairs</option>${pairs.map(p => `<option value="${esc(p)}" ${state.pair === p ? 'selected' : ''}>${pairLabel(...p.split('>'))}</option>`).join('')}</select></div><div class="field"><label for="statusFilter">Status</label><select id="statusFilter" data-control="status"><option value="all">All</option><option value="Open" ${state.status === 'Open' ? 'selected' : ''}>Open</option><option value="Within tolerance" ${state.status === 'Within tolerance' ? 'selected' : ''}>Within tolerance</option></select></div></div>
 ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>#</th><th>Pair</th><th>Type</th><th>Document</th><th>Booked by</th><th class="num">Difference</th><th class="num">Age</th><th>Status</th></tr></thead><tbody>${rows.map(e => `<tr><td>${e.id}</td><td>${pairLabel(e.creditor, e.debtor)}</td><td>${e.kind}<small class="cellnote">${esc(catLabel(e.category))}</small></td><td><span class="mono">${esc(e.doc)}</span><small class="cellnote">${esc(e.desc)}</small></td><td>${e.kind === 'Unmatched' ? `${esc(e.foundIn)} only<small class="cellnote">missing in ${esc(e.missingIn)}</small>` : `<span class="cellwrap">${esc(e.foundIn)}</span>`}</td><td class="num"><span class="${e.status === 'Open' ? 'diff' : ''}">${signedEur(e.eur)}</span><small class="cellnote right">${esc(e.cur)} ${signedNum(e.diffTC)}</small></td><td class="num">${e.age} d</td><td>${statusPill(e.status)}</td></tr>`).join('')}</tbody><tfoot><tr><td colspan="5">Net of rows shown</td><td class="num">${signedEur(total)}</td><td colspan="2"></td></tr></tfoot></table></div>` : '<div class="note success"><strong>No exceptions for this selection.</strong></div>'}
 <div class="kinds">${Object.entries(kindHelp).map(([k, v]) => `<div><strong>${k}</strong><span>${v}</span></div>`).join('')}</div></section>`;
+}
+
+function resolution() {
+  const intro = (a = '') => head('STEP 04 / RESOLUTION', 'Why each difference exists, and the entry that clears it.', 'Causes are proposed by rules from the data. Every entry is for review; nothing is posted from here.', a);
+  if (!result()) return intro() + needRates();
+  const {r, items, gross} = result();
+  if (!items.length) return intro() + '<section class="card"><div class="note success" style="margin:0"><strong>Nothing to resolve.</strong> Every intercompany line matched.</div></section>';
+  const after = reconcile(applyFixes(r.lines, items), {rates: data.rates, closeDate: data.closeDate, tolerance: state.tolerance});
+  const buckets = byBucket(items), local = items.filter(i => i.entry && i.owner !== 'Group').length, group = items.filter(i => i.owner === 'Group').length;
+  const linked = items.filter(i => i.exceptionIds.length > 1).length;
+  const amt = (cur, n) => `${esc(cur)} ${num(n)}`;
+  const elim = new Map();
+  for (const p of after.pairs) { const k = `${p.creditor}>${p.debtor}`, x = elim.get(k) || {c: p.creditor, d: p.debtor, rec: 0, pay: 0}; x.rec += p.credEUR; x.pay += p.debtEUR; elim.set(k, x); }
+  const elims = [...elim.values()].sort((a, b) => b.rec - a.rec), tot = elims.reduce((t, x) => ({rec: t.rec + x.rec, pay: t.pay + x.pay}), {rec: 0, pay: 0});
+  return intro(`<div class="actions">${button('Download workpaper CSV', 'export-workpaper', 'secondary')}</div>`) + `
+<div class="metrics">${metric('Items to resolve', String(items.length), linked ? `${plural(r.exceptions.length, 'exception')}; ${linked === 1 ? 'one mis-posted document counts once' : `${linked} mis-posted documents count once`}` : plural(r.exceptions.length, 'exception'), true)}${metric('Gross difference', eur(gross), 'Each item counted once, EUR')}${metric('Proposed entries', String(local + group), `${plural(local, 'local entry', 'local entries')}${group ? ` · ${plural(group, 'group adjustment')}` : ''}`)}${metric('Left after entries', after.summary.exceptions ? plural(after.summary.exceptions, 'exception') : eur(0), after.summary.exceptions ? `${eur(after.summary.grossEUR)} still to investigate` : 'Every pair eliminates in full')}</div>
+<section class="card"><div class="cardhead"><h2>Split by cause</h2><span class="pill neutral">EUR at closing rates</span></div><div class="tablewrap"><table><thead><tr><th>Cause</th><th class="num">Items</th><th class="num">Gross difference</th><th>Share</th></tr></thead><tbody>${buckets.map(b => `<tr><td>${b.bucket}</td><td class="num">${b.items}</td><td class="num">${eur(b.gross)}</td><td><span class="share"><i style="width:${Math.max(1, Math.round(b.gross / gross * 100))}%"></i></span>${b.gross / gross < 0.005 ? '&lt;1' : num(b.gross / gross * 100, 0)}%</td></tr>`).join('')}</tbody><tfoot><tr><td>Total</td><td class="num">${items.length}</td><td class="num">${eur(gross)}</td><td></td></tr></tfoot></table></div>
+<p class="small muted" style="margin:12px 0 0">Timing items clear on their own next period; the rest need an entry or a decision before the group close.</p></section>
+<section class="card"><div class="cardhead"><h2>Items and proposed entries</h2></div><div class="tablewrap"><table class="restable"><thead><tr><th>Item</th><th>Cause</th><th>Books it</th><th>Proposed entry</th><th class="num">Amount</th><th>Status</th></tr></thead><tbody>${items.map(i => `<tr><td>${i.id}<small class="cellnote">${i.exceptionIds.join(' + ')}</small></td><td><span class="cellwrap cause">${esc(i.cause)}</span><small class="cellnote">${pairLabel(i.creditor, i.debtor)} · ${esc(i.bucket)}${i.note ? ` · ${esc(i.note)}` : ''}</small></td><td>${esc(i.owner)}</td><td>${i.entry ? `<span class="jl">Dr ${esc(i.entry.debit)}</span><span class="jl">Cr ${esc(i.entry.credit)}</span>` : '<span class="muted">No entry until the partner confirms</span>'}</td><td class="num">${i.entry ? `${amt(i.entry.cur, i.entry.amount)}<small class="cellnote right">${eur(i.entry.eurAmount, 2)}</small>` : '—'}</td><td>${statusPill(i.status)}</td></tr>`).join('')}</tbody></table></div></section>
+<section class="card"><div class="cardhead"><h2>After the proposed entries</h2><span class="pill ${after.summary.exceptions ? 'amber' : ''}">${after.summary.exceptions ? `${after.summary.exceptions} left` : 'Clears in full'}</span></div>
+<p class="small muted" style="margin-top:-6px">The reconciliation, rerun with every proposed entry: ${num(after.summary.matchedLines, 0)} of ${num(after.summary.lines, 0)} lines match. The receivable and payable for each pair then eliminate in the group book.</p>
+<div class="tablewrap"><table><thead><tr><th>Owed to → owed by</th><th class="num">Receivable</th><th class="num">Payable</th><th class="num">Eliminated</th><th class="num">Left</th></tr></thead><tbody>${elims.map(x => `<tr><td>${pairLabel(x.c, x.d)}</td><td class="num">${eur(x.rec, 2)}</td><td class="num">${eur(x.pay, 2)}</td><td class="num">${eur(Math.min(x.rec, x.pay), 2)}</td><td class="num ${Math.abs(x.rec - x.pay) >= 0.01 ? 'diff' : 'zero'}">${eur(x.rec - x.pay, 2)}</td></tr>`).join('')}</tbody><tfoot><tr><td>Total</td><td class="num">${eur(tot.rec, 2)}</td><td class="num">${eur(tot.pay, 2)}</td><td class="num">${eur(Math.min(tot.rec, tot.pay), 2)}</td><td class="num">${eur(tot.rec - tot.pay, 2)}</td></tr></tfoot></table></div></section>`;
 }
 
 const SHOW = 1000;
@@ -84,7 +108,7 @@ function lines() {
   res?.r.matches.forEach(m => { status.set(m.r.id, `Pass ${m.pass}`); status.set(m.p.id, `Pass ${m.pass}`); });
   const all = data.lines.filter(l => state.entity === 'all' || l.entity === state.entity), rows = all.slice(0, SHOW);
   const match = l => !res ? '<span class="pill neutral">Needs rates</span>' : status.has(l.id) ? `<span class="pill">${status.get(l.id)}</span>` : '<span class="pill red">Unmatched</span>';
-  return head('STEP 04 / TRANSACTIONS', 'The data behind the reconciliation.', `${plural(data.lines.length, 'intercompany line')}, as each entity booked them. R = receivable side, P = payable side.`, `<div class="actions">${button('Download lines CSV', 'export-lines', 'secondary')}</div>`) + `
+  return head('STEP 05 / TRANSACTIONS', 'The data behind the reconciliation.', `${plural(data.lines.length, 'intercompany line')}, as each entity booked them. R = receivable side, P = payable side.`, `<div class="actions">${button('Download lines CSV', 'export-lines', 'secondary')}</div>`) + `
 <section class="card"><div class="toolbar"><div class="field"><label for="entityFilter">Booked by</label><select id="entityFilter" data-control="entity"><option value="all">All entities</option>${data.entities.filter(e => e.currency).map(e => `<option value="${esc(e.code)}" ${state.entity === e.code ? 'selected' : ''}>${esc(e.code)}${e.name ? ` · ${esc(e.name)}` : ''}</option>`).join('')}</select></div></div>
 <div class="tablewrap"><table><thead><tr><th>Line</th><th>Entity</th><th>Partner</th><th>Side</th><th>Account</th><th>Document</th><th>Date</th><th class="num">Transaction amount</th><th class="num">Local amount</th><th>Match</th></tr></thead><tbody>${rows.map(l => `<tr><td>${l.id}</td><td>${esc(l.entity)}</td><td>${esc(l.partner)}</td><td>${l.side}</td><td>${esc(catLabel(l.category))}</td><td class="mono">${esc(l.doc)}</td><td>${date(l.docDate)}</td><td class="num">${esc(l.cur)} ${l.amt < 0 ? '−' : ''}${num(Math.abs(l.amt))}</td><td class="num">${esc(l.lcur)} ${l.lamt < 0 ? '−' : ''}${num(Math.abs(l.lamt))}</td><td>${match(l)}</td></tr>`).join('')}</tbody></table></div>
 ${all.length > SHOW ? `<div class="tablefoot"><span>Showing the first ${num(SHOW, 0)} of ${num(all.length, 0)} lines. Download the CSV for all of them.</span></div>` : ''}</section>`;
@@ -96,7 +120,7 @@ function rules() {
   const entityTable = data.source === 'sample'
     ? `<thead><tr><th>Code</th><th>Entity</th><th>Country</th><th>Currency</th><th>Local GAAP</th><th>Role</th></tr></thead><tbody>${data.entities.map(e => `<tr><td>${e.code}</td><td>${esc(e.name)}</td><td>${esc(e.country)}</td><td>${e.currency}</td><td>${esc(e.gaap)}</td><td>${esc(e.role)}</td></tr>`).join('')}</tbody>`
     : `<thead><tr><th>Code</th><th>Local currency</th><th class="num">Lines booked</th></tr></thead><tbody>${data.entities.map(e => `<tr><td>${esc(e.code)}</td><td>${esc(e.currency) || '<span class="muted">Partner only, no lines booked</span>'}</td><td class="num">${num(data.lines.filter(l => l.entity === e.code).length, 0)}</td></tr>`).join('')}</tbody>`;
-  return head('STEP 05 / RATES AND RULES', 'The settings behind every number.', data.source === 'sample' ? 'Change a rate or the tolerance to see how exceptions are classed. Sample rates are illustrative, not market data.' : 'Enter the closing rate for each currency in your file, then set the tolerance.') + `
+  return head('STEP 06 / RATES AND RULES', 'The settings behind every number.', data.source === 'sample' ? 'Change a rate or the tolerance to see how exceptions are classed. Sample rates are illustrative, not market data.' : 'Enter the closing rate for each currency in your file, then set the tolerance.') + `
 ${missing.length ? `<div class="note warn"><strong>Closing rate needed for ${missing.map(esc).join(', ')}.</strong> The reconciliation runs once every currency has one.${missing.some(c => sampleRates[c]) ? `<div class="actions" style="margin-top:12px">${button(`Use the sample's illustrative rates for ${missing.filter(c => sampleRates[c]).join(', ')}`, 'fill-sample-rates', 'secondary')}</div>` : ''}</div>` : ''}
 <div class="grid2"><section class="card"><div class="cardhead"><h2>FX rates</h2><span class="pill neutral">Units per EUR 1</span></div><div class="tablewrap"><table><thead><tr><th>Currency</th><th class="num">Closing, ${date(data.closeDate)}</th><th class="num">Period average</th></tr></thead><tbody>${curs.length ? curs.map(c => `<tr${missing.includes(c) ? ' class="needsrate"' : ''}><td>${esc(c)}${missing.includes(c) ? ' <span class="pill amber">Needed</span>' : ''}</td><td class="num">${rateInput(c, 'close')}</td><td class="num">${rateInput(c, 'avg')}</td></tr>`).join('') : '<tr><td colspan="3" class="muted">Every line is in EUR; no rates needed.</td></tr>'}</tbody></table></div><p class="small muted" style="margin:12px 0 0">EUR is the group currency. Balances translate at the closing rate; the average rate is optional and kept for P&amp;L eliminations.</p></section>
 <section class="card"><div class="cardhead"><h2>Tolerance</h2></div><div class="field"><label for="tolerance">Escalate differences above (EUR)</label><input id="tolerance" type="number" min="0" step="100" value="${state.tolerance}" data-control="tolerance"></div><p class="small muted" style="margin:12px 0 0">A difference at or below this amount is listed as within tolerance and is not escalated. It is never hidden.</p></section></div>
@@ -131,12 +155,12 @@ ${loadNote}
 function casePage() {
   return head('PORTFOLIO / SORABH GUPTA', 'Intercompany close, made explainable.', 'A working demonstration of multi-entity, multi-currency intercompany reconciliation for a group shared services centre.') + `
 <section class="card"><div class="cardhead"><h2>The problem</h2></div><p>In a multinational group, every intercompany document is booked twice, by two entities, in different currencies, under different local GAAPs. At close, the two sides rarely agree, and finding why takes days of spreadsheet work.</p><p>This demo matches both sides automatically, translates every balance to the group currency, and lists each difference with the document behind it.</p></section>
-<div class="scopegrid"><section class="card"><h2>Working in this demonstration</h2><ul><li>Six fictional entities, five currencies and five local GAAPs, with 143 intercompany lines.</li><li>Three-pass matching: exact, close, and no-reference within a date window.</li><li>A translation check that catches balances not revalued at the closing rate.</li><li>An entity-pair matrix, an exception list with ageing and a configurable tolerance.</li><li>Your own data: a CSV template, row-by-row checks and editable rates. The file is read in your browser and never leaves it.</li><li>CSV exports of exceptions and lines.</li></ul></section><section class="card"><h2>Not connected or automated here</h2><ul><li>No ERP connection; the sample data is fictional.</li><li>No posting of adjusting or elimination entries.</li><li>Excel files are loaded after saving them as CSV.</li></ul></section></div>`;
+<div class="scopegrid"><section class="card"><h2>Working in this demonstration</h2><ul><li>Six fictional entities, five currencies and five local GAAPs, with 143 intercompany lines.</li><li>Three-pass matching: exact, close, and no-reference within a date window.</li><li>A translation check that catches balances not revalued at the closing rate.</li><li>A likely cause for every difference, a proposed entry for each, and the reconciliation rerun after the entries to show what is left.</li><li>An entity-pair matrix, an exception list with ageing and a configurable tolerance.</li><li>Your own data: a CSV template, row-by-row checks and editable rates. The file is read in your browser and never leaves it.</li><li>CSV exports of exceptions and lines.</li></ul></section><section class="card"><h2>Not connected or automated here</h2><ul><li>No ERP connection; the sample data is fictional.</li><li>Entries are proposed for review; nothing is posted.</li><li>Profit-and-loss eliminations are not covered; the eliminations shown are balance-sheet only.</li><li>Excel files are loaded after saving them as CSV.</li></ul></section></div>`;
 }
 
 function render() {
   document.querySelectorAll('[data-view]').forEach(b => { const on = b.dataset.view === state.view; b.classList.toggle('active', on); on ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'); });
-  $('#main').innerHTML = {data: loadData, overview, exceptions, lines, rules, case: casePage}[state.view]();
+  $('#main').innerHTML = {data: loadData, overview, exceptions, resolution, lines, rules, case: casePage}[state.view]();
   $('#closeLabel').textContent = `Close · ${date(data.closeDate)}`;
   $('#datasetPill').textContent = data.source === 'sample' ? 'Fictional data' : 'Your file';
 }
@@ -162,6 +186,13 @@ document.addEventListener('click', e => {
   const a = b.dataset.action;
   if (a === 'go-exceptions') { state.pair = ''; go('exceptions'); }
   if (a === 'go-rules') go('rules');
+  if (a === 'go-resolution') go('resolution');
+  if (a === 'export-workpaper') {
+    const {items} = result();
+    download('InterCo_resolution_workpaper.csv', csv(items.map(i => ({item: i.id, exceptions: i.exceptionIds.join(' + '), creditor: i.creditor, debtor: i.debtor, accountType: catLabel(i.category), document: i.doc, cause: i.cause, category: i.bucket, booksIt: i.owner,
+      debit: i.entry?.debit ?? '', credit: i.entry?.credit ?? '', currency: i.entry?.cur ?? '', amount: i.entry?.amount ?? '', amountEUR: i.entry?.eurAmount ?? '', differenceEUR: i.gross, status: i.status, note: i.note ?? ''}))));
+    toast('Workpaper downloaded.');
+  }
   if (a === 'fill-sample-rates') { const filled = missingRates().filter(c => sampleRates[c]); filled.forEach(c => { data.rates[c] = {...sampleRates[c]}; }); version++; render(); toast(`Sample rates filled in for ${filled.join(', ')}.`); }
   if (a === 'reset') { state = fresh(); data = sample(); version++; lastLoad = null; render(); toast('Demo reset to the sample group.'); }
   if (a === 'use-sample') { setData(sample()); lastLoad = null; render(); toast('Switched back to the sample group.'); }
