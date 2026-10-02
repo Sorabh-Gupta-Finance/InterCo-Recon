@@ -9,6 +9,7 @@ export function toEUR(amount, cur, rates, kind = 'close') {
   if (!r) throw Error(`No ${kind} rate for ${cur}.`);
   return amount / r[kind];
 }
+function group(xs, f) { const m = new Map(); for (const x of xs) { const k = f(x); m.has(k) ? m.get(k).push(x) : m.set(k, [x]); } return m; }
 function days(from, to) { return Math.round((Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 864e5); }
 
 const REQUIRED = ['entity', 'partner', 'side', 'category', 'doc', 'docDate', 'cur', 'amt', 'lcur', 'lamt'];
@@ -52,10 +53,12 @@ export function reconcile(input, {rates, closeDate, tolerance = 1000, dateWindow
   const take = (r, p, pass) => { used.add(r.id); used.add(p.id); matches.push({pass, r, p, diff: round2(r.amt - p.amt)}); };
   const free = l => !used.has(l.id);
 
-  for (const r of R) { const p = P.find(p => free(p) && p.key === r.key && p.doc === r.doc && p.cur === r.cur && Math.abs(p.amt - r.amt) < EPS); if (p) take(r, p, 1); }
-  for (const r of R.filter(free)) { const p = P.find(p => free(p) && p.key === r.key && p.doc === r.doc && p.cur === r.cur); if (p) take(r, p, 2); }
+  // Payables indexed by pair and account type, so large files match quickly.
+  const byKey = group(P, l => l.key), cands = r => byKey.get(r.key) || [];
+  for (const r of R) { const p = cands(r).find(p => free(p) && p.doc === r.doc && p.cur === r.cur && Math.abs(p.amt - r.amt) < EPS); if (p) take(r, p, 1); }
+  for (const r of R.filter(free)) { const p = cands(r).find(p => free(p) && p.doc === r.doc && p.cur === r.cur); if (p) take(r, p, 2); }
   for (const r of R.filter(free)) {
-    const p = P.find(p => free(p) && p.key === r.key && p.doc !== r.doc && p.cur === r.cur && Math.abs(p.amt - r.amt) < EPS && Math.abs(days(p.docDate, r.docDate)) <= dateWindow);
+    const p = cands(r).find(p => free(p) && p.doc !== r.doc && p.cur === r.cur && Math.abs(p.amt - r.amt) < EPS && Math.abs(days(p.docDate, r.docDate)) <= dateWindow);
     if (p) take(r, p, 3);
   }
 
@@ -75,12 +78,12 @@ export function reconcile(input, {rates, closeDate, tolerance = 1000, dateWindow
   }
 
   // Translation check, per pair and category.
-  const keys = [...new Set(lines.map(l => l.key))];
-  const pairs = keys.map(key => {
-    const ls = lines.filter(l => l.key === key), {creditor, debtor, category} = ls[0];
+  const linesByKey = group(lines, l => l.key), exByKey = group(exceptions, e => pairKey(e.creditor, e.debtor, e.category));
+  const pairs = [...linesByKey].map(([key, ls]) => {
+    const {creditor, debtor, category} = ls[0];
     const credEUR = ls.filter(l => l.side === 'R').reduce((s, l) => s + toEUR(l.lamt, l.lcur, rates), 0);
     const debtEUR = ls.filter(l => l.side === 'P').reduce((s, l) => s + toEUR(l.lamt, l.lcur, rates), 0);
-    const explained = exceptions.filter(e => pairKey(e.creditor, e.debtor, e.category) === key).reduce((s, e) => s + e.eur, 0);
+    const explained = (exByKey.get(key) || []).reduce((s, e) => s + e.eur, 0);
     const residual = credEUR - debtEUR - explained;
     return {key, creditor, debtor, category, credEUR, debtEUR, diffEUR: credEUR - debtEUR, residual, lines: ls.length};
   });
