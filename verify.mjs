@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {reconcile, pairMatrix, validateLines, csv, toEUR, round2} from './dist/engine.mjs';
 import {sampleLines, rates, closeDate, entities} from './dist/data.mjs';
+import {importLines, toTemplateRows, parseCSV, parseDate, parseAmount, monthEnd} from './dist/io.mjs';
 
 const codes = entities.map(e => e.code);
 const close = (a, b, t = 0.01) => assert.ok(Math.abs(a - b) <= t, `${a} != ${b}`);
@@ -74,5 +75,33 @@ assert.ok(validateLines([{...sampleLines[0], partner: sampleLines[0].entity}], r
 assert.match(csv([{a: '=SUM(A1)', b: 2}]), /"'=SUM/);
 close(toEUR(108, 'USD', rates), 100);
 close(round2(1.005), 1.01);
+
+// Upload: the sample data, downloaded in template layout, loads back in and reconciles identically.
+const back = importLines(csv(toTemplateRows(sampleLines)));
+assert.deepEqual(back.errors, []);
+assert.equal(back.lines.length, sampleLines.length);
+assert.deepEqual(back.entities.map(e => e.code), [...codes].sort());
+assert.equal(back.entities.find(e => e.code === 'IN01').currency, 'INR');
+assert.equal(back.maxDate, '2026-03-31');
+const rb = reconcile(back.lines, {rates, closeDate, tolerance: 1000});
+assert.deepEqual(rb.summary, r.summary);
+assert.deepEqual(rb.exceptions.map(e => [e.id, e.kind, e.doc, e.eur]), r.exceptions.map(e => [e.id, e.kind, e.doc, e.eur]));
+
+// Upload parsing: separators, byte-order mark, quotes, dates and number formats.
+assert.deepEqual(parseCSV('﻿a;b\r\n"x;1";"say ""hi"""\n'), [['a', 'b'], ['x;1', 'say "hi"']]);
+assert.equal(parseDate('2026-03-12'), '2026-03-12'); assert.equal(parseDate('12/03/2026'), '2026-03-12');
+assert.equal(parseDate('12-Mar-2026'), '2026-03-12'); assert.equal(parseDate('31/02/2026'), null); assert.equal(parseDate('03-12'), null);
+assert.equal(parseAmount('95,000.50'), 95000.5); assert.equal(parseAmount('(1,200)'), -1200); assert.equal(parseAmount('1200-'), -1200);
+assert.equal(parseAmount('−7.5'), -7.5); assert.equal(parseAmount('12a'), null); assert.equal(parseAmount(''), null);
+assert.equal(monthEnd('2026-02-14'), '2026-02-28');
+const hdr = 'Entity,Partner,Side,Account type,Document,Document date,Currency,Amount,Local currency,Local amount\n';
+const good = importLines(hdr + 'SG01,JP01,receivable,Trade,A1,2026-06-02,JPY,"1,000,000",SGD,8700\nJP01,SG01,P,trade,A1,02/06/2026,JPY,1000000,JPY,1000000\n');
+assert.deepEqual(good.errors, []); assert.equal(good.lines[0].side, 'R'); assert.equal(good.lines[0].category, 'trade');
+assert.deepEqual(good.currencies, ['JPY', 'SGD']); assert.equal(monthEnd(good.maxDate), '2026-06-30');
+assert.match(importLines('entity,partner\nA,B\n').errors[0], /Missing columns: side, account_type/);
+const bad = importLines(hdr + 'SG01,SG01,X,trade,A1,2026-13-01,JP,abc,SGD,1\nSG01,JP01,R,trade,A2,2026-06-01,USD,5,USD,6\nSG01,JP01,R,trade,A3,2026-06-01,USD,5,EUR,4\nSG01,JP01,R,trade,A4,2026-06-01,USD,5,SGD,7\n');
+for (const m of [/entity and partner are both SG01/, /side "X"/, /date "2026-13-01"/, /currency "JP"/, /amount "abc"/, /should be equal/, /more than one local currency/]) assert.ok(bad.errors.some(e => m.test(e)), String(m));
+assert.equal(bad.lines.length, 2, 'bad rows are left out');
+assert.match(importLines(hdr + '<b>,JP01,R,trade,A1,2026-06-01,JPY,1,SGD,1\n').errors[0], /short code/);
 
 console.log(JSON.stringify({result: 'passed', lines: r.summary.lines, matched: r.summary.matchedLines, exceptions: r.summary.exceptions, grossEUR: r.summary.grossEUR, byPass: r.summary.byPass}));

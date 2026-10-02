@@ -10,7 +10,9 @@ Halmrode Industrial Group is a fictional German-headquartered manufacturer with 
 - A translation check per pair and account type that catches balances not revalued at the closing rate.
 - An entity-pair matrix in EUR, an exception list with ageing, a configurable tolerance and CSV exports.
 
-Everything runs in the browser. There is no server, database or data upload.
+- Your own data: download the CSV template, load a file of open intercompany items, enter closing rates and reconcile. Every row is checked before anything loads.
+
+Everything runs in the browser. A loaded file is read locally and is never sent to a server or stored.
 
 ## Run locally
 
@@ -24,4 +26,4 @@ python3 -m http.server 8000 --directory dist
 node verify.mjs
 ```
 
-The tests check that the tool finds every one of the 11 seeded exceptions with the right type, pair, document and EUR amount, raises no false exceptions, and that every pair's EUR difference equals the sum of its exceptions.
+The tests check that the tool finds every one of the 11 seeded exceptions with the right type, pair, document and EUR amount, raises no false exceptions, and that every pair's EUR difference equals the sum of its exceptions. They also check that the sample data, downloaded in the template layout, loads back in and reconciles to the same result, and that badly formed rows are rejected with a clear message.
