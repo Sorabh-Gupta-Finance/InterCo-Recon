@@ -153,13 +153,25 @@ function askCard(load) {
   return `<div class="note warn"><strong>One question before ${esc(load.fileName)} loads: how are payables signed?</strong> The same documents carry the same sign on both sides in some rows and opposite signs in others, so the file does not settle it.<div class="actions" style="margin-top:12px">${choice('signs', 'balance', 'Payables are positive balances')}${choice('signs', 'signed', 'Payables are negative (credit) amounts')}</div></div>`;
 }
 
+// What happens to a user's data, said plainly. Shown on Load data and Inside the demo.
+const LOCK = '<svg class="lock" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
+function privacyPanel() {
+  return `<section class="card privacy" id="privacy"><div class="cardhead"><h2>${LOCK}Your data stays on your computer</h2><span class="pill">Safe to try with real data</span></div>
+<div class="privacygrid">
+<div><strong>Processed on your device</strong><p>Your file is read and reconciled inside this browser tab. There is no server and no database behind this page.</p></div>
+<div><strong>Nothing is stored</strong><p>Nothing is saved: the page sets no cookies and uses no browser storage. Refreshing or closing the tab clears everything.</p></div>
+<div><strong>Blocked from sending data</strong><p>The site carries a browser security rule (Content-Security-Policy) that stops this page from sending data anywhere.</p></div>
+<div><strong>Check it yourself</strong><p>Open the page, switch off Wi-Fi, then load your file: it still works. The code is public on <a href="https://github.com/Sorabh-Gupta-Finance/InterCo-Recon" target="_blank" rel="noopener">GitHub</a>.</p></div>
+</div></section>`;
+}
+
 function loadData() {
   const isSample = data.source === 'sample';
   const loadNote = !lastLoad ? '' : lastLoad.errorCount
     ? `<div class="note error"><strong>${esc(lastLoad.fileName)} was not loaded: ${plural(lastLoad.errorCount, 'problem')} found.</strong> Fix these rows and load the file again.<ul class="errorlist">${lastLoad.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>${lastLoad.errorCount > lastLoad.errors.length ? `<p class="small" style="margin:8px 0 0">Showing the first ${lastLoad.errors.length}.</p>` : ''}</div>`
     : lastLoad.ask ? askCard(lastLoad)
     : `<div class="note success"><strong>Loaded ${plural(lastLoad.lines, 'line')} from ${esc(lastLoad.fileName)}.</strong>${missingRates().length ? ` Enter closing rates for ${missingRates().map(esc).join(', ')} to run the reconciliation.` : ' The reconciliation has run.'}${lastLoad.notes?.length ? `<ul class="errorlist">${lastLoad.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}</div>`;
-  return head('STEP 01 / LOAD DATA', 'Reconcile your own intercompany lines.', 'Your file is read inside this browser. Nothing is uploaded to a server or saved, and closing the tab clears it.') + `
+  return head('STEP 01 / LOAD DATA', 'Reconcile your own intercompany lines.', 'Your file is read inside this browser. Nothing is uploaded to a server or saved, and closing the tab clears it.') + privacyPanel() + `
 <section class="card"><div class="cardhead"><h2>Now reconciling</h2><span class="pill ${isSample ? 'neutral' : ''}">${isSample ? 'Fictional sample' : 'Your file'}</span></div>
 <div class="loaded"><div><strong>${esc(data.label)}</strong><span class="muted small">${plural(data.lines.length, 'line')} · ${plural(data.entities.length, 'entity', 'entities')} · ${plural(currenciesUsed().length, 'currency', 'currencies')}</span></div>
 <div class="field"><label for="closeDate">Close date</label><input id="closeDate" type="date" value="${data.closeDate}" data-control="closeDate"><small>Ageing is counted to this date.</small></div></div>
@@ -183,6 +195,7 @@ ${loadNote}
 function casePage() {
   return head('PORTFOLIO / SORABH GUPTA', 'Intercompany close, made explainable.', 'A working demonstration of multi-entity, multi-currency intercompany reconciliation for a group shared services centre.') + `
 <section class="card"><div class="cardhead"><h2>The problem</h2></div><p>In a multinational group, every intercompany document is booked twice, by two entities, in different currencies, under different local GAAPs. At close, the two sides rarely agree, and finding why takes days of spreadsheet work.</p><p>This demo matches both sides automatically, translates every balance to the group currency, and lists each difference with the document behind it.</p></section>
+${privacyPanel()}
 <div class="scopegrid"><section class="card"><h2>Working in this demonstration</h2><ul><li>A fictional US software group: ${sampleEntities.length} entities, ${new Set(sampleEntities.map(e => e.currency)).size} currencies and ${new Set(sampleEntities.map(e => e.gaap)).size} local GAAPs, reporting under US GAAP in USD, with ${sampleLines.length} intercompany lines.</li><li>Three-pass matching: exact, close, and no-reference within a date window.</li><li>A translation check that catches balances not revalued at the closing rate.</li><li>A likely cause for every difference, a proposed entry for each, and the reconciliation rerun after the entries to show what is left.</li><li>An entity-pair matrix, an exception list with ageing and a configurable tolerance.</li><li>Your own data: a CSV template, row-by-row checks, dates and signs as ERPs export them, editable rates and any group currency. The file is read in your browser and never leaves it; the site is served with a security policy that blocks the page from sending data anywhere.</li><li>CSV exports of exceptions and lines.</li></ul></section><section class="card"><h2>Not connected or automated here</h2><ul><li>No ERP connection; the sample data is fictional.</li><li>Entries are proposed for review; nothing is posted.</li><li>Profit-and-loss eliminations are not covered; the eliminations shown are balance-sheet only.</li><li>Excel files are loaded after saving them as CSV.</li></ul></section></div>`;
 }
 
@@ -237,6 +250,7 @@ document.addEventListener('click', e => {
   if (a === 'go-exceptions') { state.pair = ''; go('exceptions'); }
   if (a === 'go-rules') go('rules');
   if (a === 'go-resolution') go('resolution');
+  if (a === 'go-privacy') { state.view = 'data'; render(); document.getElementById('privacy')?.scrollIntoView({behavior: 'smooth', block: 'start'}); }
   if (a === 'export-workpaper') {
     const {items} = result();
     download('InterCo_resolution_workpaper.csv', csv(items.map(i => ({item: i.id, exceptions: i.exceptionIds.join(' + '), creditor: i.creditor, debtor: i.debtor, accountType: catLabel(i.category), document: i.doc, cause: i.cause, category: i.bucket, booksIt: i.owner,
