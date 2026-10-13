@@ -37,7 +37,7 @@ const signedNum = n => (n < 0 ? '−' : n > 0 ? '+' : '') + num(Math.abs(n));
 const date = d => new Date(d + 'T00:00:00Z').toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC'});
 function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => $('#toast').classList.remove('show'), 3500); }
 function download(name, body) { const url = URL.createObjectURL(new Blob(['\uFEFF' + body], {type: 'text/csv;charset=utf-8'})); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1500); }
-const head = (kicker, title, sub, action = '') => `<div class="pagehead"><div><p class="eyebrow">${kicker}</p><h1>${title}</h1><p class="sub">${sub}</p></div>${action}</div>`;
+const head = (kicker, title, sub, action = '') => `<div class="pagehead"><div><p class="eyebrow">${kicker}</p><h1>${title}</h1>${sub ? `<p class="sub">${sub}</p>` : ''}</div>${action}</div>`;
 const metric = (label, value, meta, accent = false) => `<div class="metric ${accent ? 'accent' : ''}"><div class="label">${label}</div><div class="value">${value}</div><div class="meta">${meta}</div></div>`;
 const button = (label, action, cls = '') => `<button class="button ${cls}" data-action="${action}">${label}</button>`;
 const pairLabel = (c, d) => `${esc(c)} → ${esc(d)}`;
@@ -171,11 +171,9 @@ function loadData() {
     ? `<div class="note error"><strong>${esc(lastLoad.fileName)} was not loaded: ${plural(lastLoad.errorCount, 'problem')} found.</strong> Fix these rows and load the file again.<ul class="errorlist">${lastLoad.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>${lastLoad.errorCount > lastLoad.errors.length ? `<p class="small" style="margin:8px 0 0">Showing the first ${lastLoad.errors.length}.</p>` : ''}</div>`
     : lastLoad.ask ? askCard(lastLoad)
     : `<div class="note success"><strong>Loaded ${plural(lastLoad.lines, 'line')} from ${esc(lastLoad.fileName)}.</strong>${missingRates().length ? ` Enter closing rates for ${missingRates().map(esc).join(', ')} to run the reconciliation.` : ' The reconciliation has run.'}${lastLoad.notes?.length ? `<ul class="errorlist">${lastLoad.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}</div>`;
-  return head('STEP 01 / LOAD DATA', 'Reconcile your own intercompany lines.', 'Your file is read inside this browser. Nothing is uploaded to a server or saved, and closing the tab clears it.') + privacyPanel() + `
-<section class="card"><div class="cardhead"><h2>Now reconciling</h2><span class="pill ${isSample ? 'neutral' : ''}">${isSample ? 'Fictional sample' : 'Your file'}</span></div>
-<div class="loaded"><div><strong>${esc(data.label)}</strong><span class="muted small">${plural(data.lines.length, 'line')} · ${plural(data.entities.length, 'entity', 'entities')} · ${plural(currenciesUsed().length, 'currency', 'currencies')}</span></div>
-<div class="field"><label for="closeDate">Close date</label><input id="closeDate" type="date" value="${data.closeDate}" data-control="closeDate"><small>Ageing is counted to this date.</small></div></div>
-${isSample ? '' : `<div class="actions" style="margin-top:16px">${button('Switch back to the sample group', 'use-sample', 'secondary')}</div>`}</section>
+  return head('STEP 01 / LOAD DATA', 'Reconcile your own intercompany lines.', '') + privacyPanel() + `
+<section class="card nowcard"><div class="loaded"><div><span class="small muted">Now reconciling</span><strong>${esc(data.label)} <span class="pill ${isSample ? 'neutral' : ''}">${isSample ? 'Fictional sample' : 'Your file'}</span></strong><span class="muted small">${plural(data.lines.length, 'line')} · ${plural(data.entities.length, 'entity', 'entities')} · ${plural(currenciesUsed().length, 'currency', 'currencies')}</span></div>
+<div class="loadedright">${isSample ? '' : button('Switch back to the sample group', 'use-sample', 'secondary')}<div class="field"><label for="closeDate">Close date <span class="muted small">(ageing is counted to it)</span></label><input id="closeDate" type="date" value="${data.closeDate}" data-control="closeDate"></div></div></div></section>
 ${loadNote}
 <div class="grid2"><section class="card"><div class="cardhead"><h2>1. Prepare the file</h2></div><p class="small muted">One row per open intercompany item, from every entity, in one CSV file. Both sides of each transaction should be in the file.</p>
 <div class="actions">${button('Download template', 'export-template')}${button('Download sample data as an example', 'export-sample', 'secondary')}</div>
