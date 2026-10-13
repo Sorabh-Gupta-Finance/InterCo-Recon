@@ -2,17 +2,17 @@
 // Pure functions: the upload screen, the downloads and the tests share them.
 
 export const COLUMNS = [
-  {key: 'entity', header: 'entity', required: true, example: 'DE02', help: 'Company that booked the line'},
-  {key: 'partner', header: 'partner', required: true, example: 'US01', help: 'The other group company (trading partner)'},
+  {key: 'entity', header: 'entity', required: true, example: 'US01', help: 'Company that booked the line'},
+  {key: 'partner', header: 'partner', required: true, example: 'UK01', help: 'The other group company (trading partner)'},
   {key: 'side', header: 'side', required: true, example: 'R', help: 'R = receivable or income, P = payable or expense'},
-  {key: 'category', header: 'account_type', required: true, example: 'trade', help: 'Same word on both sides, e.g. trade, service, loan, interest, royalty'},
+  {key: 'category', header: 'account_type', required: true, example: 'license', help: 'Same word on both sides, e.g. license, service, loan, interest, royalty'},
   {key: 'doc', header: 'document', required: true, example: 'INV-1043', help: 'Invoice or reference number'},
-  {key: 'docDate', header: 'document_date', required: true, example: '2026-03-12', help: 'YYYY-MM-DD, DD/MM/YYYY or 12-Mar-2026'},
+  {key: 'docDate', header: 'document_date', required: true, example: '2026-03-12', help: 'YYYY-MM-DD, 12-Mar-2026, or a numeric date such as 31/03/26 or 3/31/26'},
   {key: 'cur', header: 'currency', required: true, example: 'USD', help: 'Transaction currency, ISO code'},
-  {key: 'amt', header: 'amount', required: true, example: '95000.00', help: 'Amount in transaction currency; dot for decimals'},
-  {key: 'lcur', header: 'local_currency', required: true, example: 'EUR', help: "The booking entity's own currency"},
-  {key: 'lamt', header: 'local_amount', required: true, example: '87962.96', help: 'Amount as booked in local currency, revalued at period end'},
-  {key: 'desc', header: 'description', required: false, example: 'Goods shipped, March', help: 'Optional'},
+  {key: 'amt', header: 'amount', required: true, example: '95000.00', help: 'Amount in transaction currency; dot for decimals. Payables can be positive or negative'},
+  {key: 'lcur', header: 'local_currency', required: true, example: 'USD', help: "The booking entity's own currency"},
+  {key: 'lamt', header: 'local_amount', required: true, example: '95000.00', help: 'Amount as booked in local currency, revalued at period end'},
+  {key: 'desc', header: 'description', required: false, example: 'EMEA subscriptions, March', help: 'Optional'},
 ];
 
 const ALIASES = {
@@ -51,12 +51,15 @@ export function parseCSV(text) {
 }
 
 const MONTHS = {jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12};
-export function parseDate(v) {
+const NUMERIC_DATE = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})$/;
+const fullYear = y => (y.length === 2 ? (+y < 70 ? 2000 + +y : 1900 + +y) : +y);
+/** ISO date from YYYY-MM-DD, 12-Mar-2026, or a numeric date read as day/month (DMY) or month/day (MDY). Two-digit years are 20xx. */
+export function parseDate(v, order = 'DMY') {
   const s = String(v).trim();
   let y, m, d, x;
   if ((x = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/))) [y, m, d] = [+x[1], +x[2], +x[3]];
-  else if ((x = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/))) [d, m, y] = [+x[1], +x[2], +x[3]];
-  else if ((x = s.match(/^(\d{1,2})[ -]([A-Za-z]{3})[a-z]*[ -](\d{4})$/)) && MONTHS[x[2].toLowerCase()]) [d, m, y] = [+x[1], MONTHS[x[2].toLowerCase()], +x[3]];
+  else if ((x = s.match(NUMERIC_DATE))) [d, m, y] = order === 'MDY' ? [+x[2], +x[1], fullYear(x[3])] : [+x[1], +x[2], fullYear(x[3])];
+  else if ((x = s.match(/^(\d{1,2})[ -]([A-Za-z]{3})[a-z]*[ -](\d{2}|\d{4})$/)) && MONTHS[x[2].toLowerCase()]) [d, m, y] = [+x[1], MONTHS[x[2].toLowerCase()], fullYear(x[3])];
   else return null;
   const dt = new Date(Date.UTC(y, m - 1, d));
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
@@ -77,10 +80,54 @@ const SIDES = {r: 'R', receivable: 'R', ar: 'R', income: 'R', p: 'P', payable: '
 // CSV downloads guard text against spreadsheet formulas with a leading apostrophe; undo it on the way back in.
 const unguard = s => String(s ?? '').trim().replace(/^'(?=[=+@\-])/, '');
 
-/** Read a template CSV into reconciliation lines. Returns {lines, errors, errorCount, entities, currencies, maxDate}. */
-export function importLines(text) {
+/**
+ * Which way round numeric dates are written. A day above 12 settles it; if no date
+ * does, the file is ambiguous and the person is asked. Returns {order, ask, example, conflict}.
+ */
+export function detectDateOrder(values) {
+  let dmy = null, mdy = null, example = null;
+  for (const v of values) {
+    const x = String(v).trim().match(NUMERIC_DATE); if (!x) continue;
+    example ??= String(v).trim();
+    if (+x[1] > 12) dmy ??= String(v).trim();
+    if (+x[2] > 12) mdy ??= String(v).trim();
+  }
+  if (dmy && mdy) return {conflict: [dmy, mdy]};
+  if (dmy) return {order: 'DMY', evidence: dmy};
+  if (mdy) return {order: 'MDY', evidence: mdy};
+  return example ? {ask: true, example} : {order: 'DMY'};
+}
+
+/**
+ * Whether payables are entered as positive balances (the template's way) or as negative
+ * credits (debit plus, credit minus, as most ERP exports show them). The same document on
+ * both sides settles it: equal amounts mean balances, opposite amounts mean signed.
+ */
+export function detectSigns(lines) {
+  const key = l => `${[l.entity, l.partner].sort().join('>')}|${l.category}|${l.doc}|${l.cur}`;
+  const rs = new Map(); for (const l of lines) if (l.side === 'R' && l.amt) rs.set(key(l), l.amt);
+  let same = 0, opposite = 0;
+  for (const l of lines) if (l.side === 'P' && l.amt && rs.has(key(l))) { const r = rs.get(key(l)); if (Math.abs(r - l.amt) < 0.005) same++; else if (Math.abs(r + l.amt) < 0.005) opposite++; }
+  if (same + opposite) {
+    if (opposite >= 0.8 * (same + opposite)) return 'signed';
+    if (same >= 0.8 * (same + opposite)) return 'balance';
+    return 'ask';
+  }
+  const share = side => { const xs = lines.filter(l => l.side === side && l.amt); return xs.length ? xs.filter(l => l.amt < 0).length / xs.length : 0; };
+  if (share('P') >= 0.8 && share('R') <= 0.2) return 'signed';
+  if (share('P') <= 0.5) return 'balance';
+  return 'ask';
+}
+
+/**
+ * Read a template CSV into reconciliation lines.
+ * options.dateOrder: 'DMY' or 'MDY' when the person has answered; options.signs: 'balance' or 'signed'.
+ * Returns {lines, errors, errorCount, entities, currencies, maxDate, notes, ask}. When ask is set,
+ * nothing is loaded until the question is answered.
+ */
+export function importLines(text, options = {}) {
   const rows = parseCSV(text).filter(r => r.some(c => String(c).trim() !== ''));
-  const out = {lines: [], errors: [], errorCount: 0, entities: [], currencies: [], maxDate: ''};
+  const out = {lines: [], errors: [], errorCount: 0, entities: [], currencies: [], maxDate: '', notes: [], ask: null};
   const err = m => { out.errorCount++; if (out.errors.length < 100) out.errors.push(m); };
   if (rows.length < 2) { err('The file has no data rows. Keep the header row and add one row per intercompany line.'); return out; }
   const header = rows[0].map(norm), col = {};
@@ -89,11 +136,20 @@ export function importLines(text) {
   if (missing.length) { err(`Missing column${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. Download the template to see the layout.`); return out; }
   if (rows.length - 1 > MAX_LINES) { err(`The file has ${rows.length - 1} rows; the limit is ${MAX_LINES.toLocaleString('en-GB')}.`); return out; }
 
+  let order = options.dateOrder;
+  if (!order) {
+    const found = detectDateOrder(rows.slice(1).map(r => unguard(r[col.docDate])));
+    if (found.conflict) { err(`Dates are written both day-first ("${found.conflict[0]}") and month-first ("${found.conflict[1]}"). Use one format for the whole file.`); return out; }
+    if (found.ask) { out.ask = {dateOrder: found.example}; return out; }
+    order = found.order;
+    if (found.evidence) out.notes.push(`Dates read as ${order === 'DMY' ? 'day/month' : 'month/day'}, because the file contains ${found.evidence}.`);
+  } else out.notes.push(`Dates read as ${order === 'DMY' ? 'day/month' : 'month/day'}, as you chose.`);
+
   const lcurOf = new Map();
   rows.slice(1).forEach((r, i) => {
     const at = `Row ${i + 2}`, get = k => unguard(r[col[k]]);
     const l = {id: `L${String(i + 1).padStart(5, '0')}`, entity: get('entity').toUpperCase(), partner: get('partner').toUpperCase(),
-      side: SIDES[get('side').toLowerCase()], category: get('category').toLowerCase(), doc: get('doc'), docDate: parseDate(get('docDate')),
+      side: SIDES[get('side').toLowerCase()], category: get('category').toLowerCase(), doc: get('doc'), docDate: parseDate(get('docDate'), order),
       cur: get('cur').toUpperCase(), amt: parseAmount(get('amt')), lcur: get('lcur').toUpperCase(), lamt: parseAmount(get('lamt')),
       desc: col.desc === undefined ? '' : get('desc')};
     const before = out.errorCount;
@@ -101,7 +157,7 @@ export function importLines(text) {
     for (const k of ['entity', 'partner']) if (l[k] && !/^[A-Z0-9][A-Z0-9_.-]{0,19}$/.test(l[k])) err(`${at}: ${k} "${l[k]}" should be a short code of letters and digits, such as DE02.`);
     if (l.entity && l.entity === l.partner) err(`${at}: entity and partner are both ${l.entity}.`);
     if (!l.side) err(`${at}: side "${get('side')}" should be R (receivable) or P (payable).`);
-    if (!l.docDate) err(`${at}: date "${get('docDate')}" is not in a recognised format (use YYYY-MM-DD).`);
+    if (!l.docDate) err(`${at}: date "${get('docDate')}" is not a valid date${NUMERIC_DATE.test(get('docDate')) ? ` when read as ${order === 'DMY' ? 'day/month' : 'month/day'}` : ''} (use YYYY-MM-DD).`);
     for (const [k, label] of [['cur', 'currency'], ['lcur', 'local_currency']]) if (!/^[A-Z]{3}$/.test(l[k])) err(`${at}: ${label} "${l[k]}" should be a three-letter code such as EUR.`);
     if (l.amt === null) err(`${at}: amount "${get('amt')}" is not a number.`);
     if (l.lamt === null) err(`${at}: local_amount "${get('lamt')}" is not a number.`);
@@ -112,6 +168,12 @@ export function importLines(text) {
     if (l.docDate > out.maxDate) out.maxDate = l.docDate;
     out.lines.push(l);
   });
+  const signs = options.signs || detectSigns(out.lines);
+  if (signs === 'ask') { out.ask = {signs: true}; out.lines = []; return out; }
+  if (signs === 'signed') {
+    for (const l of out.lines) if (l.side === 'P') { l.amt = -l.amt || 0; l.lamt = -l.lamt || 0; }
+    out.notes.push(options.signs ? 'Payables read as negative (credit) amounts, as you chose.' : 'Payables were entered as negative (credit) amounts, as in most ERP exports, and have been read as balances.');
+  }
   for (const [e, set] of lcurOf) if (set.size > 1) err(`${e} books in more than one local currency (${[...set].join(', ')}). Each entity should have one.`);
 
   const codes = new Set(out.lines.flatMap(l => [l.entity, l.partner]));

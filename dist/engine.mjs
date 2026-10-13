@@ -4,7 +4,7 @@
 export function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
 const EPS = 0.005;
 
-export function toEUR(amount, cur, rates, kind = 'close') {
+export function toGroup(amount, cur, rates, kind = 'close') {
   const r = rates[cur];
   if (!r) throw Error(`No ${kind} rate for ${cur}.`);
   return amount / r[kind];
@@ -69,20 +69,20 @@ export function reconcile(input, {rates, closeDate, tolerance = 1000, dateWindow
     const diffTC = l.side === 'R' ? l.amt : -l.amt;
     add({kind: 'Unmatched', creditor: l.creditor, debtor: l.debtor, category: l.category, doc: l.doc, docDate: l.docDate,
       foundIn: l.entity, missingIn: l.side === 'R' ? l.debtor : l.creditor, cur: l.cur, diffTC: round2(diffTC),
-      eur: toEUR(diffTC, l.cur, rates), age: days(l.docDate, closeDate), lineIds: [l.id], desc: l.desc});
+      eur: toGroup(diffTC, l.cur, rates), age: days(l.docDate, closeDate), lineIds: [l.id], desc: l.desc});
   }
   for (const m of matches.filter(m => Math.abs(m.diff) >= EPS)) {
     add({kind: 'Amount difference', creditor: m.r.creditor, debtor: m.r.debtor, category: m.r.category, doc: m.r.doc, docDate: m.r.docDate,
       foundIn: `${m.r.entity} ${fmt(m.r.amt)} vs ${m.p.entity} ${fmt(m.p.amt)}`, missingIn: '', cur: m.r.cur, diffTC: m.diff,
-      eur: toEUR(m.diff, m.r.cur, rates), age: days(m.r.docDate, closeDate), lineIds: [m.r.id, m.p.id], desc: m.r.desc});
+      eur: toGroup(m.diff, m.r.cur, rates), age: days(m.r.docDate, closeDate), lineIds: [m.r.id, m.p.id], desc: m.r.desc});
   }
 
-  // Translation check, per pair and category.
+  // Translation check, per pair and category. Amounts named eur are in the group currency.
   const linesByKey = group(lines, l => l.key), exByKey = group(exceptions, e => pairKey(e.creditor, e.debtor, e.category));
   const pairs = [...linesByKey].map(([key, ls]) => {
     const {creditor, debtor, category} = ls[0];
-    const credEUR = ls.filter(l => l.side === 'R').reduce((s, l) => s + toEUR(l.lamt, l.lcur, rates), 0);
-    const debtEUR = ls.filter(l => l.side === 'P').reduce((s, l) => s + toEUR(l.lamt, l.lcur, rates), 0);
+    const credEUR = ls.filter(l => l.side === 'R').reduce((s, l) => s + toGroup(l.lamt, l.lcur, rates), 0);
+    const debtEUR = ls.filter(l => l.side === 'P').reduce((s, l) => s + toGroup(l.lamt, l.lcur, rates), 0);
     const explained = (exByKey.get(key) || []).reduce((s, e) => s + e.eur, 0);
     const residual = credEUR - debtEUR - explained;
     return {key, creditor, debtor, category, credEUR, debtEUR, diffEUR: credEUR - debtEUR, residual, lines: ls.length};

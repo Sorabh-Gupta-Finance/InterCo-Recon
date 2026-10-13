@@ -15,3 +15,4 @@
 .sidebarbottom a.textbutton{font-size:12px;white-space:nowrap}
 .share{display:inline-block;width:120px;height:8px;border-radius:4px;background:#ece7f1;margin-right:10px;vertical-align:middle;overflow:hidden}.share i{display:block;height:100%;background:var(--teal);border-radius:4px}.restable td{vertical-align:top}.restable .cause{max-width:340px;color:var(--ink)}.restable .cellnote{max-width:340px}.jl{display:block;white-space:nowrap}.jl+.jl{padding-left:18px;color:var(--muted)}
 .restable .cause,.restable td:nth-child(2) .cellnote{min-width:230px}
+.grid2>*,.scopegrid>*{min-width:0}@media(max-width:750px){.rateinput{width:84px}}
