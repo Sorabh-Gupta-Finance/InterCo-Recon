@@ -52,6 +52,17 @@ export function explain(result, {rates, closeDate, windowDays = 5}) {
         entry: entry(r.entity, ic('R', p.entity), ic('R', r.partner), r.cur, r.amt), fix: [{op: 'set', id: r.id, changes: {partner: p.entity}}]});
     }
   }
+  // 2. The same document between the same two companies, but booked to different account types.
+  for (const a of unmatched) for (const b of unmatched) {
+    if (done.has(a.id) || done.has(b.id) || a === b) continue;
+    const r = byId.get(a.lineIds[0]), p = byId.get(b.lineIds[0]);
+    if (r.side !== 'R' || p.side !== 'P' || r.doc !== p.doc || r.cur !== p.cur || !near(r.amt, p.amt, 0.005) || r.category === p.category) continue;
+    if (p.entity !== r.partner || p.partner !== r.entity) continue;
+    push([a, b], {cause: `${r.entity} and ${p.entity} booked ${r.doc} to different account types: ${r.entity} as ${label(r.category)}, ${p.entity} as ${label(p.category)}`, bucket: 'Missing or wrong booking', owner: p.entity,
+      entry: entry(p.entity, `${ic('P', r.entity)} (${label(p.category)})`, `${ic('P', r.entity)} (${label(r.category)})`, p.cur, p.amt),
+      note: `Both sides booked it; only the classification differs. Assumes ${r.entity}'s classification is correct; reclassify the matching expense too.`,
+      fix: [{op: 'set', id: p.id, changes: {category: r.category}}]});
+  }
 
   for (const e of result.exceptions) {
     if (done.has(e.id)) continue;
@@ -94,12 +105,15 @@ export function explain(result, {rates, closeDate, windowDays = 5}) {
     } else if (e.kind === 'Amount difference') {
       const [r, p] = e.lineIds.map(id => byId.get(id)), diff = round2(r.amt - p.amt), ratio = p.amt / r.amt;
       const dayCount = r.category === 'interest' && (near(ratio, 365 / 360, 0.0005) || near(ratio, 360 / 365, 0.0005));
-      const cause = dayCount ? `Interest day count differs: ${ratio < 1 ? `${r.entity} uses actual/360, ${p.entity} actual/365` : `${r.entity} uses actual/365, ${p.entity} actual/360`}`
+      const signFlip = near(p.amt, -r.amt, 0.005), rounding = Math.abs(diff) < 1;
+      const cause = signFlip ? `${p.entity} booked ${p.doc} with the sign reversed: ${fmtAmt(p.amt)} instead of ${fmtAmt(r.amt)}`
+        : rounding ? `Rounding difference of ${r.cur} ${fmtAmt(Math.abs(diff))} on ${p.doc}`
+        : dayCount ? `Interest day count differs: ${ratio < 1 ? `${r.entity} uses actual/360, ${p.entity} actual/365` : `${r.entity} uses actual/365, ${p.entity} actual/360`}`
         : PERIOD_CHARGES.includes(r.category) ? `${p.entity} applied a different transfer-pricing rate from ${r.entity}'s invoice` : `${p.entity} booked ${p.doc} at a different amount from ${r.entity}'s invoice`;
       const account = expense(r.category);
-      push([e], {cause, bucket: 'Price or calculation', owner: p.entity,
+      push([e], {cause, bucket: signFlip ? 'Missing or wrong booking' : 'Price or calculation', owner: p.entity,
         entry: diff > 0 ? entry(p.entity, account, ic('P', r.entity), r.cur, diff) : entry(p.entity, ic('P', r.entity), account, r.cur, diff),
-        note: `Assumes ${r.entity}'s invoice is correct; confirm against the ${dayCount ? 'loan agreement' : 'intercompany agreement'}.`,
+        note: signFlip ? `Reverse ${p.entity}'s entry and rebook it with the correct sign; the correction is twice the amount.` : rounding ? 'Below one unit of currency; clear it to a rounding account.' : `Assumes ${r.entity}'s invoice is correct; confirm against the ${dayCount ? 'loan agreement' : 'intercompany agreement'}.`,
         fix: [{op: 'set', id: p.id, changes: {amt: r.amt, lamt: p.cur === p.lcur ? r.amt : atClose(r.amt, p.cur, p.lcur, rates)}}]});
     } else if (e.kind === 'FX translation') {
       const ls = result.lines.filter(l => l.key === pairKeyOf(e) && l.cur !== l.lcur);
@@ -121,6 +135,7 @@ export function explain(result, {rates, closeDate, windowDays = 5}) {
   items.forEach((it, i) => { it.id = `R${String(i + 1).padStart(2, '0')}`; });
   return items;
 }
+const fmtAmt = n => Number(n).toLocaleString('en-US', {maximumFractionDigits: 2});
 const fmtRate = x => String(Number(x.toPrecision(6)));
 
 /**
@@ -133,6 +148,38 @@ export function offRateLines(lines, rates, minGroup = 1) {
     const expected = atClose(l.amt, l.cur, l.lcur, rates), dev = round2(l.lamt - expected);
     return {line: l, expected, dev, devGroup: round2(toGroup(dev, l.lcur, rates)), usedRate: l.amt ? fmtRate(l.lamt / l.amt) : '', closeRate: fmtRate(rates[l.lcur].close / rates[l.cur].close)};
   }).filter(x => Math.abs(x.devGroup) >= minGroup);
+}
+
+/** Lines dated after the close date belong to the next period: they are left out of this period's reconciliation and listed. */
+export function splitByCloseDate(lines, closeDate) {
+  const inPeriod = [], after = [];
+  for (const l of lines) (l.docDate > closeDate ? after : inPeriod).push(l);
+  return {inPeriod, after};
+}
+
+/**
+ * The closing rate most of a file's lines were booked at, per currency, in units per one group-currency unit.
+ * Read from lines between a currency and the group currency. A rate is suggested only when most lines agree on it.
+ */
+export function suggestRates(lines, group) {
+  const seen = {};
+  for (const l of lines) {
+    if (l.cur === l.lcur || !l.amt || !l.lamt) continue;
+    let cur, rate;
+    if (l.cur === group) [cur, rate] = [l.lcur, l.lamt / l.amt];
+    else if (l.lcur === group) [cur, rate] = [l.cur, l.amt / l.lamt];
+    else continue;
+    if (!(rate > 0)) continue;
+    const key = String(Number(rate.toPrecision(4)));
+    (seen[cur] ??= {})[key] = (seen[cur][key] || 0) + 1;
+  }
+  const out = {};
+  for (const [cur, counts] of Object.entries(seen)) {
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    const [rate, count] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    if (count / total > 0.5) out[cur] = {rate: Number(rate), count, total};
+  }
+  return out;
 }
 
 /**

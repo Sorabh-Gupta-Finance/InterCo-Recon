@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {reconcile, pairMatrix, validateLines, csv, toGroup, round2} from './dist/engine.mjs';
 import {sampleLines, rates, closeDate, entities} from './dist/data.mjs';
-import {explain, applyFixes, byBucket, offRateLines, convertedWarnings} from './dist/explain.mjs';
+import {explain, applyFixes, byBucket, offRateLines, convertedWarnings, splitByCloseDate, suggestRates} from './dist/explain.mjs';
 import {importLines, toTemplateRows, parseCSV, parseDate, parseAmount, monthEnd, detectDateOrder, detectSigns} from './dist/io.mjs';
 
 const codes = entities.map(e => e.code);
@@ -196,5 +196,29 @@ assert.deepEqual(convertedWarnings(r.lines, rates, 'USD'), [], 'no warning on th
 const asUSD = sampleLines.map(l => (l.entity === 'UK01' && l.cur !== l.lcur ? {...l, lamt: l.amt / rates[l.cur].close} : l));
 const w = convertedWarnings(reconcile(asUSD, {rates, closeDate}).lines, rates, 'USD');
 assert.equal(w.length, 1); assert.equal(w[0].entity, 'UK01'); assert.equal(w[0].lcur, 'GBP'); assert.equal(w[0].hits, w[0].total);
+
+// Fixes from testing with a fresh Q3 file: account-type mismatch, sign reversal, rounding, cut-off, rate suggestion.
+const q3rates = {USD: {close: 1}, EUR: {close: 0.92}, GBP: {close: 0.8}, INR: {close: 88}};
+const L = (id, entity, partner, side, category, doc, docDate, cur, amt, lcur, lamt) => ({id, entity, partner, side, category, doc, docDate, cur, amt, lcur, lamt});
+const q3 = [
+  L('a', 'US01', 'DE01', 'R', 'sbc', 'T6', '2026-09-30', 'USD', 74000, 'USD', 74000),
+  L('b', 'DE01', 'US01', 'P', 'service', 'T6', '2026-09-30', 'USD', 74000, 'EUR', 68080),
+  L('c', 'US01', 'IN01', 'R', 'recharge', 'T10', '2026-09-26', 'USD', 9400, 'USD', 9400),
+  L('d', 'IN01', 'US01', 'P', 'recharge', 'T10', '2026-09-26', 'USD', -9400, 'INR', -827200),
+  L('e', 'DE01', 'UK01', 'R', 'recharge', 'T9', '2026-09-24', 'EUR', 12500, 'EUR', 12500),
+  L('f', 'UK01', 'DE01', 'P', 'recharge', 'T9', '2026-09-24', 'EUR', 12499.97, 'GBP', 10869.54),
+];
+const q3r = reconcile(q3, {rates: q3rates, closeDate: '2026-09-30'}), q3i = explain(q3r, {rates: q3rates, closeDate: '2026-09-30'});
+const t6 = q3i.find(i => i.doc === 'T6');
+assert.equal(t6.exceptionIds.length, 2, 'the two TEST-006 rows are one item');
+assert.match(t6.cause, /different account types: US01 as stock compensation recharge, DE01 as cost-plus services/); assert.equal(t6.owner, 'DE01'); close(t6.gross, 74000);
+assert.match(q3i.find(i => i.doc === 'T10').cause, /sign reversed: -9,400 instead of 9,400/);
+assert.match(q3i.find(i => i.doc === 'T9').cause, /Rounding difference of EUR 0\.03/);
+assert.equal(reconcile(applyFixes(q3r.lines, q3i), {rates: q3rates, closeDate: '2026-09-30'}).summary.exceptions, 0, 'all three clear after the entries');
+const cut = splitByCloseDate([L('g', 'DE01', 'US01', 'R', 'service', 'T11', '2026-08-31', 'EUR', 1, 'EUR', 1), L('h', 'US01', 'DE01', 'P', 'service', 'T11', '2026-09-01', 'EUR', 1, 'USD', 1.09)], '2026-08-31');
+assert.deepEqual([cut.inPeriod.map(l => l.id), cut.after.map(l => l.id)], [['g'], ['h']]);
+const sg = suggestRates(sampleLines, 'USD');
+assert.deepEqual(Object.fromEntries(Object.entries(sg).map(([c, x]) => [c, x.rate])), {GBP: 0.79, SGD: 1.34, INR: 85.5, EUR: 0.925, BRL: 5.65});
+assert.ok(sg.BRL.count < sg.BRL.total, 'the BR01 line at 5.45 is outvoted, so it is still flagged');
 
 console.log(JSON.stringify({result: 'passed', items: items.length, itemGrossUSD: round2(items.reduce((t, i) => t + i.gross, 0)), lines: r.summary.lines, matched: r.summary.matchedLines, exceptions: r.summary.exceptions, grossUSD: r.summary.grossEUR, byPass: r.summary.byPass}));
