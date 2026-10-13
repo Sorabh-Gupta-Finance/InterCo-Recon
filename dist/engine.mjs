@@ -43,7 +43,7 @@ export const pairKey = (creditor, debtor, category) => `${creditor}>${debtor}|${
  * Then a translation check per pair and category: the EUR value of each side's local
  * amounts must agree once the transaction-currency differences are explained.
  */
-export function reconcile(input, {rates, closeDate, tolerance = 1000, dateWindow = 5}) {
+export function reconcile(input, {rates, closeDate, tolerance = 1000, dateWindow = 5, groupCurrency = Object.keys(rates).find(c => rates[c]?.close === 1) || ''}) {
   const lines = input.map(l => {
     const o = orient(l);
     return {...l, amt: +l.amt, lamt: +l.lamt, ...o, key: pairKey(o.creditor, o.debtor, l.category)};
@@ -90,8 +90,8 @@ export function reconcile(input, {rates, closeDate, tolerance = 1000, dateWindow
   for (const pr of pairs.filter(p => Math.abs(p.residual) > 1)) {
     const debtorLines = lines.filter(l => l.key === pr.key && l.side === 'P' && l.cur !== l.lcur);
     add({kind: 'FX translation', creditor: pr.creditor, debtor: pr.debtor, category: pr.category, doc: 'Balance', docDate: closeDate,
-      foundIn: 'Local-currency balances', missingIn: '', cur: 'EUR', diffTC: round2(pr.residual), eur: pr.residual, age: 0,
-      lineIds: debtorLines.map(l => l.id), desc: 'Transaction amounts agree; local-currency values translate to different EUR amounts'});
+      foundIn: 'Local-currency balances', missingIn: '', cur: groupCurrency, diffTC: round2(pr.residual), eur: pr.residual, age: 0,
+      lineIds: debtorLines.map(l => l.id), desc: `Transaction amounts agree; local-currency values translate to different ${groupCurrency || 'group-currency'} amounts`});
   }
 
   exceptions.sort((a, b) => Math.abs(b.eur) - Math.abs(a.eur));

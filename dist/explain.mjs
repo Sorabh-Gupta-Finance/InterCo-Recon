@@ -71,7 +71,8 @@ export function explain(result, {rates, closeDate, windowDays = 5}) {
       } else if (l.category === 'lease') {
         push([e], {cause: `Lease recognised on balance sheet by ${l.entity} only: lessee and lessor accounting differ`, bucket: 'Accounting policy', owner: 'Group',
           entry: entry('Group', l.side === 'P' ? `Lease liability, ${l.entity}` : `Lease receivable, ${l.entity}`, l.side === 'P' ? `Right-of-use asset, ${l.entity}` : `Property, plant and equipment, ${l.entity}`, l.cur, l.amt),
-          note: 'Consolidation adjustment: the intragroup lease is eliminated in the group book. No entry in either local book.', fix: [{op: 'remove', id: l.id}]});
+          status: 'Consolidation adjustment',
+          note: 'No entry in either local book; the intragroup lease is eliminated in the group book. Simplified: in practice the right-of-use asset and the liability differ after initial recognition, and the elimination also reverses the lessee\'s depreciation and interest and the lessor\'s rent income.', fix: [{op: 'remove', id: l.id}]});
       } else if (l.side === 'P' && l.amt < 0) {
         const base = PERIOD_CHARGES.includes(l.category) && result.lines.find(x => x.key === l.key && x.side === 'R' && x.amt > 0 && WHT_RATES.some(t => near(Math.abs(l.amt), x.amt * t, 0.01)));
         if (base) {
@@ -108,7 +109,8 @@ export function explain(result, {rates, closeDate, windowDays = 5}) {
         const ent = who[0], dev = round2(off.reduce((s, x) => s + x.dev, 0)), side = off[0].l.side, lcur = off[0].l.lcur, partner = off[0].l.partner;
         // A payable or receivable carried below its closing-rate value is topped up, and the reverse.
         const up = dev < 0, isP = side === 'P';
-        push([e], {cause: `${ent} did not revalue the ${label(e.category)} balance at the closing rate`, bucket: 'FX revaluation', owner: ent,
+        const used = [...new Set(off.map(x => fmtRate(x.l.lamt / x.l.amt)))], closeRate = fmtRate(rates[lcur].close / rates[off[0].l.cur].close);
+        push([e], {cause: `${ent} did not revalue the ${label(e.category)} balance at the closing rate: it used ${used.join(' and ')} ${lcur} per ${off[0].l.cur}; the closing rate is ${closeRate}`, bucket: 'FX revaluation', owner: ent,
           entry: isP ? (up ? entry(ent, 'FX loss', ic('P', partner), lcur, dev) : entry(ent, ic('P', partner), 'FX gain', lcur, dev))
             : (up ? entry(ent, ic('R', partner), 'FX gain', lcur, dev) : entry(ent, 'FX loss', ic('R', partner), lcur, dev)),
           fix: off.map(x => ({op: 'set', id: x.l.id, changes: {lamt: atClose(x.l.amt, x.l.cur, x.l.lcur, rates)}}))});
@@ -119,6 +121,37 @@ export function explain(result, {rates, closeDate, windowDays = 5}) {
   items.forEach((it, i) => { it.id = `R${String(i + 1).padStart(2, '0')}`; });
   return items;
 }
+const fmtRate = x => String(Number(x.toPrecision(6)));
+
+/**
+ * Every foreign-currency line whose local amount is not the transaction amount at the closing rate.
+ * The translation check in reconcile() works on pair totals; this list works line by line, so two
+ * errors that offset within a pair still show. minGroup is the smallest difference reported, in the group currency.
+ */
+export function offRateLines(lines, rates, minGroup = 1) {
+  return lines.filter(l => l.cur !== l.lcur && rates[l.cur]?.close > 0 && rates[l.lcur]?.close > 0).map(l => {
+    const expected = atClose(l.amt, l.cur, l.lcur, rates), dev = round2(l.lamt - expected);
+    return {line: l, expected, dev, devGroup: round2(toGroup(dev, l.lcur, rates)), usedRate: l.amt ? fmtRate(l.lamt / l.amt) : '', closeRate: fmtRate(rates[l.lcur].close / rates[l.cur].close)};
+  }).filter(x => Math.abs(x.devGroup) >= minGroup);
+}
+
+/**
+ * Entities whose local amounts look as if they were already converted to the group currency:
+ * for most of their foreign-currency lines, local_amount equals the transaction amount in the
+ * group currency rather than in the entity's own currency.
+ */
+export function convertedWarnings(lines, rates, group) {
+  const near = (a, b) => Math.abs(a - b) <= Math.max(0.01, Math.abs(b) * 0.005);
+  const out = [];
+  for (const ent of [...new Set(lines.map(l => l.entity))]) {
+    const ls = lines.filter(l => l.entity === ent && l.cur !== l.lcur && l.amt && rates[l.cur]?.close > 0 && rates[l.lcur]?.close > 0);
+    if (!ls.length || ls[0].lcur === group || Math.abs(rates[ls[0].lcur].close / rates[group].close - 1) < 0.01) continue;
+    const hits = ls.filter(l => near(l.lamt, l.amt / rates[l.cur].close * rates[group].close) && !near(l.lamt, atClose(l.amt, l.cur, l.lcur, rates)));
+    if (hits.length >= 0.8 * ls.length) out.push({entity: ent, lcur: ls[0].lcur, group, hits: hits.length, total: ls.length});
+  }
+  return out;
+}
+
 const pairKeyOf = e => `${e.creditor}>${e.debtor}|${e.category}`;
 function unknown(l, other) {
   return {cause: `Booked by ${l.entity} only; ${other} to confirm`, bucket: 'To investigate', owner: other, entry: null,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {reconcile, pairMatrix, validateLines, csv, toGroup, round2} from './dist/engine.mjs';
 import {sampleLines, rates, closeDate, entities} from './dist/data.mjs';
-import {explain, applyFixes, byBucket} from './dist/explain.mjs';
+import {explain, applyFixes, byBucket, offRateLines, convertedWarnings} from './dist/explain.mjs';
 import {importLines, toTemplateRows, parseCSV, parseDate, parseAmount, monthEnd, detectDateOrder, detectSigns} from './dist/io.mjs';
 
 const codes = entities.map(e => e.code);
@@ -174,5 +174,27 @@ const ownR = reconcile(own.lines, {rates: ownRates, closeDate: '2026-06-30'}), o
 assert.equal(ownItems.find(i => i.doc === 'A1').bucket, 'To investigate'); assert.equal(ownItems.find(i => i.doc === 'A1').entry, null);
 assert.match(ownItems.find(i => i.doc === 'A2').cause, /different amount/); close(ownItems.find(i => i.doc === 'A2').entry.amount, 10);
 assert.equal(reconcile(applyFixes(ownR.lines, ownItems), {rates: ownRates, closeDate: '2026-06-30'}).summary.exceptions, 1, 'only the unexplained line is left');
+
+// Review changes: lease shown as a consolidation adjustment, the FX cause names the rate used,
+// line-by-line FX check, and a warning for local amounts already converted to the group currency.
+assert.equal(item('LSE-US01-IN01').status, 'Consolidation adjustment');
+assert.match(item('LSE-US01-IN01').note, /Simplified/);
+assert.match(item('Balance').cause, /used 5\.45 BRL per USD; the closing rate is 5\.65/);
+const off = offRateLines(r.lines, rates);
+assert.equal(off.length, 1, 'only the seeded BR01 line is off the closing rate');
+assert.equal(off[0].line.doc, 'INV-US01-BR-0316'); close(off[0].dev, -50000); close(off[0].devGroup, -8849.56); assert.equal(off[0].usedRate, '5.45');
+const offset = [
+  {id: 'a', entity: 'US01', partner: 'UK01', side: 'R', category: 'license', doc: 'D1', docDate: '2026-03-01', cur: 'USD', amt: 1000, lcur: 'USD', lamt: 1000},
+  {id: 'b', entity: 'UK01', partner: 'US01', side: 'P', category: 'license', doc: 'D1', docDate: '2026-03-01', cur: 'USD', amt: 1000, lcur: 'GBP', lamt: 800},
+  {id: 'c', entity: 'US01', partner: 'UK01', side: 'R', category: 'license', doc: 'D2', docDate: '2026-03-01', cur: 'USD', amt: 1000, lcur: 'USD', lamt: 1000},
+  {id: 'd', entity: 'UK01', partner: 'US01', side: 'P', category: 'license', doc: 'D2', docDate: '2026-03-01', cur: 'USD', amt: 1000, lcur: 'GBP', lamt: 780},
+];
+const rOff = reconcile(offset, {rates, closeDate});
+assert.equal(rOff.exceptions.length, 0, 'the two errors offset, so the pair totals agree');
+assert.equal(offRateLines(rOff.lines, rates).length, 2, 'but each line is still listed');
+assert.deepEqual(convertedWarnings(r.lines, rates, 'USD'), [], 'no warning on the sample');
+const asUSD = sampleLines.map(l => (l.entity === 'UK01' && l.cur !== l.lcur ? {...l, lamt: l.amt / rates[l.cur].close} : l));
+const w = convertedWarnings(reconcile(asUSD, {rates, closeDate}).lines, rates, 'USD');
+assert.equal(w.length, 1); assert.equal(w[0].entity, 'UK01'); assert.equal(w[0].lcur, 'GBP'); assert.equal(w[0].hits, w[0].total);
 
 console.log(JSON.stringify({result: 'passed', items: items.length, itemGrossUSD: round2(items.reduce((t, i) => t + i.gross, 0)), lines: r.summary.lines, matched: r.summary.matchedLines, exceptions: r.summary.exceptions, grossUSD: r.summary.grossEUR, byPass: r.summary.byPass}));
