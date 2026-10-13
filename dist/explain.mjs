@@ -1,11 +1,15 @@
 // Root causes and proposed entries for reconciliation exceptions.
 // Pure functions: the resolution screen, the workpaper download and the tests share them.
-import {round2, toEUR} from './engine.mjs';
+import {round2, toGroup} from './engine.mjs';
 
 export const BUCKETS = ['Timing', 'Missing or wrong booking', 'Price or calculation', 'FX revaluation', 'Accounting policy', 'To investigate'];
-const PERIOD_CHARGES = ['service', 'mgmtfee', 'royalty', 'interest'];
+const PERIOD_CHARGES = ['service', 'mgmtfee', 'royalty', 'interest', 'sbc', 'hosting'];
+const IN_TRANSIT = ['trade', 'license', 'recharge'];
 const WHT_RATES = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3];
-const LABEL = {trade: 'goods and recharges', service: 'shared services', mgmtfee: 'management fee', royalty: 'royalty', interest: 'interest', loan: 'loan', cashpool: 'cash pool', dividend: 'dividend', lease: 'lease'};
+const LABEL = {trade: 'goods and recharges', license: 'subscription resale', service: 'cost-plus services', sbc: 'stock compensation recharge', hosting: 'hosting recharge', recharge: 'expense recharge',
+  mgmtfee: 'management fee', royalty: 'royalty', interest: 'interest', loan: 'loan', cashpool: 'cash pool', dividend: 'dividend', lease: 'lease'};
+const EXPENSE = {trade: 'Inventory or cost of sales', license: 'Cost of revenue (subscriptions)', recharge: 'Recharged expense'};
+const expense = c => EXPENSE[c] || `${label(c)[0].toUpperCase() + label(c).slice(1)} expense`;
 const label = c => LABEL[c] || c;
 const ic = (side, partner) => `Intercompany ${side === 'R' ? 'receivable' : 'payable'}, ${partner}`;
 const days = (from, to) => Math.round((Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 864e5);
@@ -32,7 +36,7 @@ export function explain(result, {rates, closeDate, windowDays = 5}) {
   // A line the other side should have booked, valued at the closing rate.
   const mirror = (l, entity, partner, amt = l.amt) => { const lcur = lcurOf.get(entity) || l.cur;
     return {entity, partner, side: l.side === 'R' ? 'P' : 'R', category: l.category, doc: l.doc, docDate: l.docDate, cur: l.cur, amt, lcur, lamt: atClose(amt, l.cur, lcur, rates), desc: l.desc}; };
-  const entry = (entity, debit, credit, cur, amount) => ({entity, debit, credit, cur, amount: round2(Math.abs(amount)), eurAmount: round2(Math.abs(toEUR(amount, cur, rates)))});
+  const entry = (entity, debit, credit, cur, amount) => ({entity, debit, credit, cur, amount: round2(Math.abs(amount)), groupAmount: round2(Math.abs(toGroup(amount, cur, rates)))});
 
   const unmatched = result.exceptions.filter(e => e.kind === 'Unmatched');
   // 1. The same document, booked by both sides, but one side picked the wrong partner.
@@ -78,19 +82,20 @@ export function explain(result, {rates, closeDate, windowDays = 5}) {
           push([e], {cause: `Cash in transit: ${l.entity} paid on ${day(l.docDate)}; ${other} has not received it`, bucket: 'Timing', owner: other,
             entry: entry(other, 'Cash in transit', ic('R', l.entity), l.cur, l.amt), fix: [{op: 'add', line: mirror(l, other, l.entity)}]});
         } else push([e], unknown(l, other));
-      } else if (l.side === 'R' && l.amt > 0 && l.category === 'trade' && age <= windowDays) {
-        push([e], {cause: `Goods in transit: ${l.entity} invoiced on ${day(l.docDate)}; ${other} has not received them`, bucket: 'Timing', owner: other,
-          entry: entry(other, 'Goods in transit', ic('P', l.entity), l.cur, l.amt), fix: [{op: 'add', line: mirror(l, other, l.entity)}]});
+      } else if (l.side === 'R' && l.amt > 0 && IN_TRANSIT.includes(l.category) && age <= windowDays) {
+        const goods = l.category === 'trade';
+        push([e], {cause: goods ? `Goods in transit: ${l.entity} invoiced on ${day(l.docDate)}; ${other} has not received them` : `Invoice in transit: ${l.entity} invoiced on ${day(l.docDate)}; ${other} has not booked it yet`, bucket: 'Timing', owner: other,
+          entry: entry(other, goods ? 'Goods in transit' : expense(l.category), ic('P', l.entity), l.cur, l.amt), fix: [{op: 'add', line: mirror(l, other, l.entity)}]});
       } else if (l.side === 'R' && l.amt > 0 && PERIOD_CHARGES.includes(l.category)) {
         push([e], {cause: `${other} has not accrued the ${label(l.category)} charged by ${l.entity}`, bucket: 'Missing or wrong booking', owner: other,
-          entry: entry(other, `${label(l.category)[0].toUpperCase() + label(l.category).slice(1)} expense`, ic('P', l.entity), l.cur, l.amt), fix: [{op: 'add', line: mirror(l, other, l.entity)}]});
+          entry: entry(other, expense(l.category), ic('P', l.entity), l.cur, l.amt), fix: [{op: 'add', line: mirror(l, other, l.entity)}]});
       } else push([e], unknown(l, other));
     } else if (e.kind === 'Amount difference') {
       const [r, p] = e.lineIds.map(id => byId.get(id)), diff = round2(r.amt - p.amt), ratio = p.amt / r.amt;
       const dayCount = r.category === 'interest' && (near(ratio, 365 / 360, 0.0005) || near(ratio, 360 / 365, 0.0005));
       const cause = dayCount ? `Interest day count differs: ${ratio < 1 ? `${r.entity} uses actual/360, ${p.entity} actual/365` : `${r.entity} uses actual/365, ${p.entity} actual/360`}`
         : PERIOD_CHARGES.includes(r.category) ? `${p.entity} applied a different transfer-pricing rate from ${r.entity}'s invoice` : `${p.entity} booked ${p.doc} at a different amount from ${r.entity}'s invoice`;
-      const account = r.category === 'trade' ? 'Inventory or cost of sales' : `${label(r.category)[0].toUpperCase() + label(r.category).slice(1)} expense`;
+      const account = expense(r.category);
       push([e], {cause, bucket: 'Price or calculation', owner: p.entity,
         entry: diff > 0 ? entry(p.entity, account, ic('P', r.entity), r.cur, diff) : entry(p.entity, ic('P', r.entity), account, r.cur, diff),
         note: `Assumes ${r.entity}'s invoice is correct; confirm against the ${dayCount ? 'loan agreement' : 'intercompany agreement'}.`,
@@ -107,7 +112,7 @@ export function explain(result, {rates, closeDate, windowDays = 5}) {
           entry: isP ? (up ? entry(ent, 'FX loss', ic('P', partner), lcur, dev) : entry(ent, ic('P', partner), 'FX gain', lcur, dev))
             : (up ? entry(ent, ic('R', partner), 'FX gain', lcur, dev) : entry(ent, 'FX loss', ic('R', partner), lcur, dev)),
           fix: off.map(x => ({op: 'set', id: x.l.id, changes: {lamt: atClose(x.l.amt, x.l.cur, x.l.lcur, rates)}}))});
-      } else push([e], {cause: 'Local-currency balances translate to different EUR amounts; more than one entity is affected', bucket: 'FX revaluation', owner: 'Both', entry: null, fix: []});
+      } else push([e], {cause: 'Local-currency balances translate to different group-currency amounts; more than one entity is affected', bucket: 'FX revaluation', owner: 'Both', entry: null, fix: []});
     }
   }
   items.sort((a, b) => b.gross - a.gross);
