@@ -15,6 +15,8 @@ Orrowind Software is a fictional US-headquartered cloud software group with six 
 
 Everything runs in the browser. A loaded file is read locally and is never sent to a server or stored. The site is served with a Content-Security-Policy whose `connect-src 'none'` stops the page from sending data anywhere, even if the code were changed.
 
+Lines dated after the close date are left out of the period and listed, closing rates can be suggested from the rates most of a file's lines were booked at, and the resolution rules also recognise documents booked to different account types, sign reversals and rounding differences.
+
 Foreign-currency lines are also checked one by one against the closing rate, and the tool warns when an entity's local amounts look already converted to the group currency.
 
 ## Run locally
