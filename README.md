@@ -13,7 +13,9 @@ Orrowind Software is a fictional US-headquartered cloud software group with six 
 - Resolution: a likely cause for every difference (timing, missing or wrong booking, price or calculation, FX revaluation, accounting policy), a proposed entry naming who books it, and the reconciliation rerun after the entries with a balance-sheet elimination by pair. A workpaper downloads as CSV.
 - Your own data: download the CSV template, load a file of open intercompany items, enter closing rates and reconcile. Every row is checked before anything loads. Numeric dates can be day-first or month-first, with two-digit years, and payables can be positive balances or negative credits as ERPs export them; when a file does not settle either, the tool asks.
 
-Everything runs in the browser. A loaded file is read locally and is never sent to a server or stored.
+Everything runs in the browser. A loaded file is read locally and is never sent to a server or stored. The site is served with a Content-Security-Policy whose `connect-src 'none'` stops the page from sending data anywhere, even if the code were changed.
+
+Foreign-currency lines are also checked one by one against the closing rate, and the tool warns when an entity's local amounts look already converted to the group currency.
 
 ## Run locally
 
