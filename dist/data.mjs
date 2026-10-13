@@ -1,11 +1,11 @@
-// Tidewell Software — fictional intercompany dataset, Q1 2026 close.
+// Orrowind Software — fictional intercompany dataset, Q1 2026 close.
 // A US-headquartered cloud software group reporting under US GAAP in USD.
 // Every intercompany document is booked by both sides unless it is one of the
 // 11 seeded exceptions listed at the end. All names and figures are fictional.
 
 export const closeDate = '2026-03-31';
 export const groupCurrency = 'USD';
-export const groupName = 'Tidewell Software';
+export const groupName = 'Orrowind Software';
 
 // Illustrative rates, units of currency per USD 1 (not market data).
 export const rates = {
@@ -18,12 +18,12 @@ export const rates = {
 };
 
 export const entities = [
-  {code: 'US01', name: 'Tidewell Software, Inc.', country: 'United States', currency: 'USD', gaap: 'US GAAP', role: 'Parent: IP owner, treasury, buys cloud hosting'},
-  {code: 'UK01', name: 'Tidewell Software Ltd', country: 'United Kingdom', currency: 'GBP', gaap: 'FRS 102', role: 'EMEA distributor: resells subscriptions'},
-  {code: 'DE01', name: 'Tidewell Software GmbH', country: 'Germany', currency: 'EUR', gaap: 'HGB', role: 'Sales support, cost plus 8%'},
-  {code: 'IN01', name: 'Tidewell Technologies India Pvt Ltd', country: 'India', currency: 'INR', gaap: 'Ind AS', role: 'Engineering centre, cost plus 15%'},
-  {code: 'SG01', name: 'Tidewell Software Pte Ltd', country: 'Singapore', currency: 'SGD', gaap: 'SFRS(I)', role: 'APAC distributor: resells subscriptions'},
-  {code: 'BR01', name: 'Tidewell Software do Brasil Ltda', country: 'Brazil', currency: 'BRL', gaap: 'BR GAAP (CPC)', role: 'LatAm distributor: pays a software royalty'},
+  {code: 'US01', name: 'Orrowind Software, Inc.', country: 'United States', currency: 'USD', gaap: 'US GAAP', role: 'Parent: IP owner, treasury, buys cloud hosting'},
+  {code: 'UK01', name: 'Orrowind Software Ltd', country: 'United Kingdom', currency: 'GBP', gaap: 'FRS 102', role: 'EMEA distributor: resells subscriptions'},
+  {code: 'DE01', name: 'Orrowind Software GmbH', country: 'Germany', currency: 'EUR', gaap: 'HGB', role: 'Sales support, cost plus 8%'},
+  {code: 'IN01', name: 'Orrowind Technologies India Pvt Ltd', country: 'India', currency: 'INR', gaap: 'Ind AS', role: 'Engineering centre, cost plus 15%'},
+  {code: 'SG01', name: 'Orrowind Software Pte Ltd', country: 'Singapore', currency: 'SGD', gaap: 'SFRS(I)', role: 'APAC distributor: resells subscriptions'},
+  {code: 'BR01', name: 'Orrowind Software do Brasil Ltda', country: 'Brazil', currency: 'BRL', gaap: 'BR GAAP (CPC)', role: 'LatAm distributor: pays a software royalty'},
 ];
 
 export const categories = {

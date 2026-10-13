@@ -4,7 +4,7 @@ A finance automation portfolio prototype by Sorabh Gupta. All entities, transact
 
 ## What it does
 
-Tidewell Software is a fictional US-headquartered cloud software group with six entities in six currencies (USD, GBP, EUR, INR, SGD, BRL) and six local GAAPs (US GAAP, FRS 102, HGB, Ind AS, SFRS(I), BR GAAP), reporting to the group under US GAAP in USD. Its intercompany flows are subscription resale to foreign distributors, cost-plus engineering and sales support, stock compensation and cloud hosting recharges, a software royalty, funding loans and a dividend. Its Q1 2026 close holds 169 intercompany lines, each booked by both sides, with 11 seeded differences.
+Orrowind Software is a fictional US-headquartered cloud software group with six entities in six currencies (USD, GBP, EUR, INR, SGD, BRL) and six local GAAPs (US GAAP, FRS 102, HGB, Ind AS, SFRS(I), BR GAAP), reporting to the group under US GAAP in USD. Its intercompany flows are subscription resale to foreign distributors, cost-plus engineering and sales support, stock compensation and cloud hosting recharges, a software royalty, funding loans and a dividend. Its Q1 2026 close holds 169 intercompany lines, each booked by both sides, with 11 seeded differences.
 
 - Three-pass matching: exact (pair, account type, document, currency, amount), close (same document, amounts differ) and no-reference (same amount within 5 days).
 - A translation check per pair and account type that catches balances not revalued at the closing rate.
